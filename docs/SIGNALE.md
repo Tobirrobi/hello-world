@@ -81,6 +81,31 @@ Im Schnitt waren 44% des Budgets investiert, der Rest lag als Cash bereit (z. B.
 * Für viele Einsteiger ist ein **ETF-Sparplan** (z. B. MSCI World) die einfachere Basis. Gezielte Einzelkäufe können eine
   Ergänzung sein.
 
+## Fairer Vergleich: sofort kaufen oder auf ein Signal warten?
+
+Die entscheidende Frage für Anleger: *Ich will Aktie X kaufen. Kaufe ich heute, oder warte ich auf ein Signal?*
+Getestet für jeden möglichen Starttag seit 2001: Variante A kauft sofort. Variante B wartet bis zum Signal (höchstens
+12 Monate, sonst wird trotzdem gekauft). Beide werden am selben Tag 3 Jahre später abgerechnet, wartendes Geld ohne Zinsen.
+
+| Warten auf … | deine Liste: Warten besser / gleich / schlechter | Ø Ergebnis ggü. sofort | Problemfirmen: Ø Ergebnis ggü. sofort | Lufthansa: Ø ggü. sofort |
+|---|---|---:|---:|---:|
+| Dip −20 % vom 52-Wochen-Hoch | 34 / 23 / 43 % | −4,5 % | −1,1 % | +0,3 % |
+| Dip −30 % vom 52-Wochen-Hoch | 31 / 13 / 55 % | −5,8 % | +0,5 % | +2,6 % |
+| Quartalszahlen-Kaufmail für genau diese Aktie | – | −4,8 % | +3,4 % | +2,7 % |
+
+**Ergebnis:** Warten hat sich im Schnitt **nicht** gelohnt. Aktien steigen öfter, als sie fallen. Während man wartet, verpasst
+man Gewinne, und der „Dip“ liegt oft über dem heutigen Kurs. Bei schwachen Firmen war Warten etwa gleich gut wie Sofortkaufen.
+
+**Gegenprobe mit Problemfirmen** (Deutsche Bank, Commerzbank, Bayer, Lufthansa, Thyssenkrupp, VW, Continental, Fresenius,
+Nokia, Intel, Boeing, Citigroup, Pfizer u. a.): Dort brachte das Quartalszahlen-Kaufsignal nach 3 Monaten nur
++0,5 Prozentpunkte gegenüber Käufen ohne Signal, nach 1–2 Jahren nichts. Ein Teil des Vorteils in der eigenen Liste
+dürfte also daran liegen, dass sie aus den Gewinnern von heute besteht.
+
+**Fazit:** Kein getestetes Signal schlug „sofort kaufen und langfristig halten“ verlässlich. Über das Ergebnis entscheidet
+vor allem, *welche* Firmen man langfristig hält und wie breit man streut, nicht der Zeitpunkt. Die Kaufmails sind deshalb
+eher eine Ideenquelle als ein belegter Vorteil. Für Einsteiger bleibt ein regelmäßiger ETF-Sparplan die robusteste Basis
+(„Time in the market beats timing the market“).
+
 ## Was getestet und bewusst weggelassen wurde
 
 * **Chartsignale mit Linien** (Kurs über/unter der 200-Tage-Linie, Golden/Death Cross, RSI über 70/unter 30, MACD,
