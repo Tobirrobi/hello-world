@@ -204,6 +204,36 @@ def cmd_signal_studie(args) -> None:
         (out / "signal_studie.md").write_text(md + "\n", encoding="utf-8")
 
 
+def cmd_etf_check(args) -> None:
+    import inspect
+    import json
+
+    from . import etf_check as ec
+
+    prov = make_provider(args.provider, args.data_dir)
+    as_of = args.as_of or date.today()
+    status = ec.check(prov, as_of)
+    print(ec.to_text(status))
+    alarm = ec.alarm_mail(status)
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(json.dumps({"zusammenfassung": ec.summary(status), "alarm": alarm,
+                                               "etfs": ec.dashboard_rows(status)}, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+    if args.dashboard_dir:
+        out = Path(args.dashboard_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        code = inspect.getsource(ec)
+        meta = [{"label": "etf_check.py", "value": code, "type": "code", "lang": "python"},
+                {"label": "Daten", "value": "Yahoo Finance (yfinance), tägliche Schlusskurse der ETFs und Vergleichsindizes"},
+                {"label": "Stand", "value": as_of.isoformat()}]
+        (out / "etf_status.json").write_text(json.dumps({"rows": ec.dashboard_rows(status), "meta": meta},
+                                                        ensure_ascii=False), encoding="utf-8")
+        (out / "etf_verlauf.json").write_text(json.dumps({"rows": ec.history(prov, as_of), "meta": meta[1:]},
+                                                         ensure_ascii=False), encoding="utf-8")
+        print(f"Dashboard-Dateien in {out}/")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="marktanalyse", description="Regelbasierte Aktienmarktanalyse mit Long-/Short-Empfehlungen")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -262,6 +292,14 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--end", type=_date, default=date.today())
     st.add_argument("--output")
     st.set_defaults(func=cmd_signal_studie)
+
+    ec = sub.add_parser("etf-check", help="Ist gerade ein günstiger Zeitpunkt für Extra-Geld in bekannte ETFs?")
+    ec.add_argument("--provider", default="yahoo", choices=["yahoo", "csv", "demo"])
+    ec.add_argument("--data-dir")
+    ec.add_argument("--as-of", type=_date, help="Stichtag (Standard: heute)")
+    ec.add_argument("--json", help="Ergebnis als JSON (inkl. Alarm-Mail, falls fällig)")
+    ec.add_argument("--dashboard-dir", help="Dateien für das ETF-Check-Dashboard schreiben")
+    ec.set_defaults(func=cmd_etf_check)
 
     k = sub.add_parser("kennzahlen", help="Katalog aller Kennzahlen und Signale anzeigen")
     k.add_argument("--markdown", action="store_true")

@@ -420,3 +420,42 @@ def test_buy_only_mode_max_one_mail_per_stock_per_year():
     assert _titles(prov, wl, idx[third], verkauf=False) == ["KAUFEN: Testfirma"]
     # Signale vor dem Start der Mails zählen nicht für die Grenze
     assert _titles(prov, wl, idx[second], verkauf=False, since=idx[react + 1].date()) == ["KAUFEN: Testfirma"]
+
+
+# ------------------------------------------------------------------ ETF-Check
+def _etf_setup(drop):
+    from marktanalyse.etf_check import ETFS
+
+    idx = pd.bdate_range("2000-01-03", periods=1500)
+    rise = 100 * np.exp(np.linspace(0, 0.8, 1500))
+    crash = rise.copy()
+    crash[-3:] = rise[-4] * (1 + drop)  # in den letzten 3 Tagen eingebrochen
+    frames = {"TESTWELT": _frame(crash, idx), "TESTLAND": _frame(crash, idx), "^PROXY": _frame(rise, idx)}
+    prov = _FakeSignalProvider(frames, {})
+    base = dict(proxy="^PROXY", proxy_name="Proxy", proxy_start=date(2000, 1, 1), art="Test")
+    etfs = [dict(ticker="TESTWELT", isin="XW", name="Welt", breit=True, **base),
+            dict(ticker="TESTLAND", isin="XL", name="Land", breit=False, **base)]
+    return prov, etfs, idx
+
+
+def test_etf_check_crash_only_for_broad_etf_and_single_alarm():
+    from marktanalyse.etf_check import alarm_mail, check, dashboard_rows
+
+    prov, etfs, idx = _etf_setup(-0.25)
+    st = check(prov, idx[-1].date(), etfs)
+    by = {s.isin: s for s in st}
+    assert by["XW"].urteil == "guenstig" and by["XW"].stufe == 3
+    assert by["XL"].urteil == "normal" and "kein" in by["XL"].text
+    assert alarm_mail(check(prov, idx[-3].date(), etfs)) is not None  # Tag des Einbruchs
+    assert alarm_mail(st) is None  # zwei Tage später keine zweite Mail
+    rows = dashboard_rows(st)
+    assert rows[0]["abstand_pct"] == pytest.approx(-25.0, abs=0.1) and rows[0]["urteil"] == "Guter Zeitpunkt"
+
+
+def test_etf_check_normal_near_high():
+    from marktanalyse.etf_check import alarm_mail, check, summary
+
+    prov, etfs, idx = _etf_setup(-0.03)
+    st = check(prov, idx[-1].date(), etfs)
+    assert all(s.urteil == "normal" and s.stufe == 0 for s in st)
+    assert alarm_mail(st) is None and "kein besonders günstiger" in summary(st)

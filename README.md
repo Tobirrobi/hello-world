@@ -26,6 +26,13 @@ brachten bei Einzelaktien keinen Vorteil. Verkaufsmails sind optional (`--mit-ve
 
 Alle Regeln, Tests und Einordnungen: **[docs/SIGNALE.md](docs/SIGNALE.md)**.
 
+## ETF-Check: Extra-Geld zum Sparplan?
+
+`marktanalyse etf-check` zeigt für bekannte ETFs (MSCI World, FTSE All-World, S&P 500, DAX, Nasdaq 100,
+Schwellenländer), wie weit sie unter ihrem Höchststand liegen. „Guter Zeitpunkt“ heißt es nur, wenn ein breiter
+Welt- oder US-ETF mehr als 20 % eingebrochen ist; dann gibt es auch eine Mail. Details und Belege:
+**[docs/ETF_CHECK.md](docs/ETF_CHECK.md)**.
+
 ## Was das Tool macht
 
 ```
