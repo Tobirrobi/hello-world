@@ -10,22 +10,22 @@ eine Strategie für die aktuelle Marktphase.
 > ⚠️ Keine Anlageberatung. Die Analyse ist automatisch und regelbasiert; Daten können fehlerhaft sein.
 > Leerverkäufe bergen ein unbegrenztes Verlustrisiko.
 
-## Signal-Wächter: tägliche Mail bei deutlichen Signalen
+## Signal-Wächter: Kaufmail → kaufen und halten, Verkaufsmail → verkaufen
 
 ```bash
-marktanalyse signale                      # prüft beobachtungsliste.csv für den letzten Handelstag
-marktanalyse signale --smtp               # … und mailt bei Signalen (SMTP-Variablen siehe docs/SIGNALE.md)
-marktanalyse signal-studie --start 2000-01-01   # historische Prüfung der Signale
+marktanalyse signale --seit 2026-11-16          # prüft beobachtungsliste.csv für den letzten Börsentag
+marktanalyse signale --betrag 500 --smtp        # … mit festem Betrag in der Mail, Versand per SMTP
+marktanalyse signal-studie --start 2000-01-01   # historische Prüfung inkl. Depot-Simulation
 ```
 
-Gemeldet werden nur Signale mit historisch belegtem Vorteil:
-* **Kauf nach starken Quartalszahlen**: Gewinnüberraschung ≥ 5 % und Kursreaktion ≥ 3 % über dem Markt.
-  Danach lief die Aktie seit 2002 im Schnitt +5,1 % besser als der Markt in 3 Monaten (normal: +2,1 %).
-* **Verkauf** nach 3 Monaten Haltedauer oder bei der Notbremse (−15 %).
-* **Marktampel** für den MSCI World (200-Tage-Linie), die die großen Einbrüche deutlich verringerte.
+* **Kaufmail**, wenn eine Firma deutlich bessere Quartalszahlen meldet (Gewinn ≥ 5 % über der Erwartung) und die Aktie
+  am Meldetag ≥ 3 % stärker steigt als der Markt.
+* **Verkaufsmail** nach 3 Monaten oder wenn die Aktie mehr als 15 % unter den Kaufkurs fällt.
+* Historisch (2002–2026, jede Mail befolgt, Budget in 6 Teile) etwa 10 % pro Jahr bei kleineren Einbrüchen als die
+  Indizes, also ungefähr so viel wie ein breiter Aktien-ETF. Klassische Chartsignale brachten keinen Vorteil und werden
+  nicht gemeldet.
 
-Klassische Chartsignale wie Golden Cross, RSI oder Trendbruch hatten bei Einzelaktien keinen Vorteil und werden
-deshalb nicht gemeldet. Details und alle Testergebnisse: **[docs/SIGNALE.md](docs/SIGNALE.md)**.
+Alle Regeln, Tests und Einordnungen: **[docs/SIGNALE.md](docs/SIGNALE.md)**.
 
 ## Was das Tool macht
 

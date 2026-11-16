@@ -309,21 +309,30 @@ def _frame(closes, idx):
     return pd.DataFrame({"open": c, "high": c * 1.01, "low": c * 0.99, "close": c, "volume": 1e6})
 
 
-def _signal_setup(after_entry):
+def _announce(idx, pos, surprise=20.0):
+    """Meldung nach US-Börsenschluss am Vortag -> Reaktionstag = idx[pos]."""
+    ts = pd.Timestamp(idx[pos - 1].date()).tz_localize("America/New_York") + pd.Timedelta(hours=16, minutes=30)
+    return pd.DataFrame({"estimate": [1.0], "reported": [1.2], "surprise": [surprise]}, index=[ts])
+
+
+def _signal_setup(after_entry=110.0, n=500):
     from marktanalyse.signale import SignalRules
 
-    idx = pd.bdate_range("2024-01-01", periods=400)
+    idx = pd.bdate_range("2024-01-01", periods=n)
     react = 300  # Reaktionstag (Index)
-    stock = np.full(400, 100.0)
+    stock = np.full(n, 100.0)
     stock[react:] = 108.0  # +8 % am Meldetag
     stock[react + 1:] = after_entry
-    flat = _frame(np.full(400, 1000.0), idx)
-    market = _frame(np.linspace(800, 1000, 400), idx)
-    ann = pd.Timestamp(idx[react - 1].date()).tz_localize("America/New_York") + pd.Timedelta(hours=16, minutes=30)
-    earn = pd.DataFrame({"estimate": [1.0], "reported": [1.2], "surprise": [20.0]}, index=[ann])
-    prov = _FakeSignalProvider({"TEST": _frame(stock, idx), "^GSPC": flat, "URTH": market}, {"TEST": earn})
+    prov = _FakeSignalProvider({"TEST": _frame(stock, idx), "^GSPC": _frame(np.full(n, 1000.0), idx)},
+                               {"TEST": _announce(idx, react)})
     wl = pd.DataFrame({"ticker": ["TEST"], "isin": ["XX000"], "name": ["Testfirma"], "region": ["US"], "branche": [""]})
     return prov, wl, idx, react, SignalRules()
+
+
+def _titles(prov, wl, day, **kw):
+    from marktanalyse.signale import scan
+
+    return [a.titel for a in scan(prov, wl, day.date(), **kw).alerts]
 
 
 def test_reaction_day_after_close_and_premarket():
@@ -336,38 +345,51 @@ def test_reaction_day_after_close_and_premarket():
     assert idx[reaction_day(pre, idx)] == pd.Timestamp("2026-11-03")
 
 
-def test_buy_signal_then_sell_after_holding_period():
-    from marktanalyse.signale import scan, subject
+def test_buy_mail_then_sell_mail_after_holding_period():
+    from marktanalyse.signale import scan, subject, to_html
 
-    prov, wl, idx, react, rules = _signal_setup(after_entry=110.0)
-    rep = scan(prov, wl, idx[react].date())
-    buys = [a for a in rep.alerts if a.art == "kauf"]
-    assert len(buys) == 1 and buys[0].stop == pytest.approx(108 * 0.85)
-    assert "Kauf: Testfirma" in subject(rep)
-    assert not [a for a in scan(prov, wl, idx[react + 10].date()).alerts if a.ticker == "TEST"]
-    sell = scan(prov, wl, idx[react + rules.hold_days].date()).alerts
-    assert [a.titel for a in sell if a.ticker == "TEST"] == ["VERKAUFEN: Testfirma – Haltedauer von 3 Monaten erreicht"]
+    prov, wl, idx, react, rules = _signal_setup()
+    rep = scan(prov, wl, idx[react].date(), betrag=500)
+    assert subject(rep) == "Aktien-Signal – KAUFEN: Testfirma"
+    assert "XX000" in to_html(rep) and "500 €" in to_html(rep)
+    assert _titles(prov, wl, idx[react + 10]) == []
+    # Einstieg am Folgetag, verkauft wird 63 Handelstage nach dem Signal
+    assert _titles(prov, wl, idx[react + rules.hold_days]) == ["VERKAUFEN: Testfirma"]
+    sell = scan(prov, wl, idx[react + rules.hold_days].date()).alerts[0]
+    assert "3 Monate" in sell.grund and sell.ergebnis == pytest.approx(0.0)
 
 
-def test_emergency_stop_fires_once_and_replaces_holding_exit():
-    from marktanalyse.signale import scan
-
+def test_emergency_stop_sends_single_sell_mail():
     prov, wl, idx, react, rules = _signal_setup(after_entry=108.0)
     df = prov.frames["TEST"].copy()
     df.loc[idx[react + 5]:, ["open", "high", "low", "close"]] = 85.0  # −21 % ab Tag 5
     prov.frames["TEST"] = df
-    hits = {d: [a.titel for a in scan(prov, wl, idx[d].date()).alerts if a.ticker == "TEST"]
-            for d in (react + 4, react + 5, react + 6, react + rules.hold_days)}
-    assert hits[react + 4] == [] and hits[react + 6] == [] and hits[react + rules.hold_days] == []
-    assert hits[react + 5] == ["VERKAUFEN: Testfirma – Notbremse ausgelöst"]
+    seen = {d: _titles(prov, wl, idx[d]) for d in (react + 4, react + 5, react + 6, react + rules.hold_days)}
+    assert seen == {react + 4: [], react + 5: ["VERKAUFEN: Testfirma"], react + 6: [], react + rules.hold_days: []}
 
 
-def test_weak_reaction_gives_no_signal_and_market_light():
-    from marktanalyse.signale import scan
+def test_new_buy_signal_while_holding_extends_without_mail():
+    prov, wl, idx, react, rules = _signal_setup()
+    second = react + 40  # zweites Kaufsignal, Aktie wird noch gehalten
+    df = prov.frames["TEST"].copy()
+    df.iloc[second:, :4] = 120.0  # +9 % am zweiten Meldetag
+    prov.frames["TEST"] = df
+    prov.earn["TEST"] = pd.concat([_announce(idx, react), _announce(idx, second)])
+    assert _titles(prov, wl, idx[second]) == []  # kein zweites "KAUFEN"
+    assert _titles(prov, wl, idx[react + rules.hold_days]) == []  # alte Haltedauer verlängert
+    assert _titles(prov, wl, idx[second + rules.hold_days]) == ["VERKAUFEN: Testfirma"]
 
+
+def test_sell_mails_only_for_buys_since_start_date():
+    prov, wl, idx, react, rules = _signal_setup()
+    start = idx[react + 1].date()  # Mails erst nach dem Kaufsignal eingerichtet
+    assert _titles(prov, wl, idx[react + rules.hold_days], since=start) == []
+    assert _titles(prov, wl, idx[react + rules.hold_days]) == ["VERKAUFEN: Testfirma"]
+
+
+def test_weak_reaction_gives_no_signal():
     prov, wl, idx, react, _ = _signal_setup(after_entry=101.0)
     df = prov.frames["TEST"].copy()
     df.iloc[react:, :4] = 101.0  # nur +1 % Reaktion
     prov.frames["TEST"] = df
-    rep = scan(prov, wl, idx[react].date())
-    assert rep.alerts == [] and rep.marktampel == "grün"
+    assert _titles(prov, wl, idx[react]) == []

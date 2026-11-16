@@ -55,7 +55,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
           # Lauf nach US-Börsenschluss: der heutige Handelstag ist abgeschlossen
-          marktanalyse signale --as-of "$(date -u +%F)" --json reports/signale.json --smtp
+          marktanalyse signale --as-of "$(date -u +%F)" --seit 2026-11-16 --json reports/signale.json --smtp
 
       - name: Report in Zusammenfassung
         run: cat reports/latest.md >> "$GITHUB_STEP_SUMMARY"

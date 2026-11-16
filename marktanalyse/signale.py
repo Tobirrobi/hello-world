@@ -1,23 +1,25 @@
-"""Signal-Wächter: tägliche Prüfung einer Beobachtungsliste, Meldung nur bei deutlichen Signalen.
+"""Signal-Wächter: einfache Kauf-/Verkaufsmails für Einsteiger.
 
-Welche Signale – und warum (Details: docs/SIGNALE.md)
------------------------------------------------------
-Klassische Chartsignale (Trendwende, Rücksetzer, Golden Cross, 52-Wochen-Hoch,
-Trendbruch) hatten bei der Beobachtungsliste 2001–2026 **keinen** messbaren
-Vorsprung. Belegt waren dagegen:
+Die Regel für den Nutzer ist absichtlich ganz einfach:
 
-1. **Kauf nach starken Quartalszahlen** (Post-Earnings-Drift): Gewinn je Aktie
-   ≥ 5 % über der Analystenschätzung **und** Kurs am Meldetag ≥ 3 % besser als
-   der Markt. Danach lief die Aktie im Schnitt 3 Monate lang weiter besser als
-   der Markt.
-2. **Verkauf nach Ende der Haltedauer** (63 Handelstage ≈ 3 Monate) bzw. bei
-   der **Notbremse** (−15 % unter Einstand).
-3. **Marktampel** (MSCI World vs. 200-Tage-Linie mit 2 % Puffer): senkte die
-   großen Einbrüche deutlich. Rot = neue Käufe zurückstellen / Risiko senken,
-   Grün = wieder investieren.
+* **Kaufmail** → Aktie für den festen Betrag kaufen und halten.
+* **Verkaufsmail** → Aktie komplett verkaufen.
 
-Short-Signale werden nicht gemeldet: Keines hatte in den Tests einen Vorteil, und
-bei Trade Republic wäre Shorten nur über Hebelprodukte möglich.
+Wann eine Kaufmail kommt
+    Die Firma hat Quartalszahlen gemeldet, der Gewinn je Aktie lag ≥ 5 % über
+    der Analystenschätzung **und** die Aktie stieg am Meldetag ≥ 3 % stärker als
+    der Markt. Historisch lief die Aktie danach im Schnitt rund 3 Monate weiter
+    besser als der Markt (Post-Earnings-Drift, siehe docs/SIGNALE.md).
+
+Wann eine Verkaufsmail kommt
+    * 63 Handelstage (≈ 3 Monate) nach dem Kaufsignal, oder
+    * wenn der Schlusskurs mehr als 15 % unter dem Kaufkurs liegt (Notbremse).
+
+Kommt für eine Aktie, die man (laut den Mails) schon besitzt, ein neues
+Kaufsignal, gibt es keine Mail: Man hält einfach weiter, die 3 Monate beginnen
+neu. Klassische Chartsignale, die Marktampel und Short-Signale werden nicht
+gemeldet: Sie brachten in den Tests keinen Vorteil (Kaufsignale liefen auch bei
+schwachem Gesamtmarkt nicht schlechter).
 """
 
 from __future__ import annotations
@@ -28,17 +30,16 @@ import logging
 import os
 import smtplib
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from .data.base import DataProvider, normalize_prices
-from .timing import trend_state
-from .indicators import sma
 
 log = logging.getLogger(__name__)
 
@@ -48,41 +49,56 @@ class SignalRules:
     surprise_min: float = 5.0  # Gewinnüberraschung in %
     reaction_min: float = 0.03  # Kursreaktion am Meldetag, marktbereinigt
     hold_days: int = 63  # Haltedauer in Handelstagen
-    emergency_stop: float = -0.15  # Notbremse ab Einstand
-    market_ticker: str = "URTH"  # iShares MSCI World (Proxy für den Weltmarkt)
-    market_name: str = "MSCI World"
-    trend_band: float = 0.02
+    emergency_stop: float = -0.15  # Notbremse ab Kaufkurs
     bench_us: str = "^GSPC"
     bench_other: str = "^GDAXI"
+    cost_per_side: float = 0.001  # Spread/Gebühr in der Studie
+    slots: int = 6  # Budget-Aufteilung für die Studie (= Faustregel "Budget ÷ 6")
 
 
 @dataclass
 class Alert:
-    art: str  # "kauf" | "verkauf" | "markt"
-    titel: str
-    ticker: str = ""
-    name: str = ""
+    art: str  # "kauf" | "verkauf"
+    ticker: str
+    name: str
     isin: str = ""
     kurs: Optional[float] = None
-    datum: Optional[date] = None
-    details: list[str] = field(default_factory=list)
-    stop: Optional[float] = None
-    halten_bis: Optional[date] = None
     waehrung: str = ""
+    datum: Optional[date] = None
+    grund: str = ""
+    ergebnis: Optional[float] = None  # bei Verkauf: Kursentwicklung seit Kauf
+
+    @property
+    def titel(self) -> str:
+        return f"{'KAUFEN' if self.art == 'kauf' else 'VERKAUFEN'}: {self.name}"
 
 
 @dataclass
 class SignalReport:
     as_of: date
     alerts: list[Alert]
-    marktampel: str  # "grün" | "rot" | "unbekannt"
-    marktampel_text: str
     geprueft: int
+    betrag: Optional[float] = None
     warnungen: list[str] = field(default_factory=list)
 
     @property
     def has_signals(self) -> bool:
         return bool(self.alerts)
+
+
+@dataclass
+class Position:
+    """Eine Position, wie sie entsteht, wenn man jede Mail befolgt."""
+
+    buy_pos: int
+    buy_date: date
+    hold_start: int
+    surprise: float
+    reaction: float
+    entry: Optional[float] = None  # Eröffnungskurs am Tag nach dem Signal
+    exit_pos: Optional[int] = None
+    exit_reason: str = ""
+    verlaengert: int = 0
 
 
 # --------------------------------------------------------------------------- Hilfen
@@ -114,10 +130,8 @@ def reaction_day(ts: pd.Timestamp, index: pd.DatetimeIndex) -> Optional[int]:
     return pos if pos < len(index) else None
 
 
-def earnings_events(
-    earnings: pd.DataFrame, px: pd.DataFrame, bench: pd.Series, rules: SignalRules
-) -> list[dict]:
-    """Alle Kaufsignale nach Quartalszahlen in der Kurshistorie ``px``."""
+def earnings_events(earnings: pd.DataFrame, px: pd.DataFrame, bench: pd.Series, rules: SignalRules) -> list[dict]:
+    """Alle Quartalsmeldungen in der Kurshistorie ``px`` mit Überraschung, Reaktion und Kaufsignal-Flag."""
     out = []
     if earnings is None or earnings.empty or len(px) < 2:
         return out
@@ -136,9 +150,42 @@ def earnings_events(
         out.append({
             "pos": pos, "datum": idx[pos].date(), "surprise": float(surprise), "reaktion": float(react),
             "eps": row.get("reported"), "schaetzung": row.get("estimate"),
-            "kauf": surprise >= rules.surprise_min and react >= rules.reaction_min,
+            "kauf": bool(surprise >= rules.surprise_min and react >= rules.reaction_min),
         })
     return out
+
+
+def replay(px: pd.DataFrame, events: list[dict], rules: SignalRules, since: Optional[date] = None) -> list[Position]:
+    """Spielt die Regel „Kaufmail → kaufen & halten, Verkaufsmail → verkaufen“ über die Historie ab.
+
+    Kaufsignale vor ``since`` werden ignoriert (dafür gab es noch keine Mail).
+    """
+    buys = {}
+    for ev in events:
+        if ev["kauf"]:
+            buys.setdefault(ev["pos"], ev)
+    o, c, idx = px["open"].to_numpy(), px["close"].to_numpy(), px.index
+    positions: list[Position] = []
+    cur: Optional[Position] = None
+    for i in range(len(px)):
+        if cur is not None and cur.entry is None and i == cur.buy_pos + 1:
+            cur.entry = float(o[i]) if np.isfinite(o[i]) and o[i] > 0 else float(c[i - 1])
+        if i in buys:
+            ev = buys[i]
+            if cur is None:
+                if since is None or idx[i].date() >= since:
+                    cur = Position(i, idx[i].date(), i, ev["surprise"], ev["reaktion"])
+                    positions.append(cur)
+            else:
+                cur.hold_start = i  # neues Signal: weiter halten, 3 Monate beginnen neu
+                cur.verlaengert += 1
+            continue
+        if cur is not None and cur.entry is not None:
+            if c[i] < cur.entry * (1 + rules.emergency_stop):
+                cur.exit_pos, cur.exit_reason, cur = i, "notbremse", None
+            elif i - cur.hold_start >= rules.hold_days:
+                cur.exit_pos, cur.exit_reason, cur = i, "haltedauer", None
+    return positions
 
 
 def _fmt_pct(x: float, digits: int = 1) -> str:
@@ -147,6 +194,10 @@ def _fmt_pct(x: float, digits: int = 1) -> str:
 
 def _fmt_px(x: float) -> str:
     return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _fmt_eur(x: float) -> str:
+    return f"{x:,.0f} €".replace(",", ".")
 
 
 def currency_of(ticker: str) -> str:
@@ -162,50 +213,23 @@ def scan(
     watchlist: pd.DataFrame,
     as_of: Optional[date] = None,
     rules: Optional[SignalRules] = None,
-    analyzer=None,
+    since: Optional[date] = None,
+    betrag: Optional[float] = None,
 ) -> SignalReport:
-    """Prüft alle Werte zum Stichtag. Es zählen nur abgeschlossene Handelstage ≤ ``as_of``."""
+    """Prüft alle Werte zum Stichtag (letzter abgeschlossener Handelstag ≤ ``as_of``)."""
     r = rules or SignalRules()
     as_of = as_of or (date.today() - timedelta(days=1))
-    start = as_of - timedelta(days=500)
+    start = as_of - timedelta(days=550)
     alerts: list[Alert] = []
     warnings: list[str] = []
+    bench_cache: dict[str, pd.Series] = {}
 
     def prices(t: str) -> pd.DataFrame:
-        df = normalize_prices(provider.prices(t, start, as_of))
-        return df.loc[: pd.Timestamp(as_of)]
+        return normalize_prices(provider.prices(t, start, as_of)).loc[: pd.Timestamp(as_of)]
 
-    # ---- Marktampel
-    ampel, ampel_text = "unbekannt", "Marktdaten nicht verfügbar"
-    try:
-        m = prices(r.market_ticker)
-        st = trend_state(m["close"], sma(m["close"], 200), r.trend_band)
-        if len(st) > 1 and st.iloc[-1] != 0:
-            ampel = "grün" if st.iloc[-1] > 0 else "rot"
-            dist = m["close"].iloc[-1] / sma(m["close"], 200).iloc[-1] - 1
-            ampel_text = (f"{r.market_name} {_fmt_pct(dist)} {'über' if dist > 0 else 'unter'} der 200-Tage-Linie "
-                          f"(Stand {m.index[-1]:%d.%m.%Y})")
-            if st.iloc[-2] != st.iloc[-1] and st.iloc[-2] != 0:
-                if st.iloc[-1] > 0:
-                    alerts.append(Alert("markt", f"Marktampel springt auf GRÜN ({r.market_name})", r.market_ticker,
-                                        r.market_name, kurs=float(m['close'].iloc[-1]), datum=m.index[-1].date(),
-                                        details=[ampel_text, "Der Weltmarkt ist wieder im Aufwärtstrend: Käufe und "
-                                                 "Sparpläne wieder normal ausführen, abgesicherte Positionen wieder aufbauen."]))
-                else:
-                    alerts.append(Alert("markt", f"Marktampel springt auf ROT ({r.market_name})", r.market_ticker,
-                                        r.market_name, kurs=float(m['close'].iloc[-1]), datum=m.index[-1].date(),
-                                        details=[ampel_text, "Der Weltmarkt hat seinen langfristigen Aufwärtstrend "
-                                                 "verlassen: neue Einzelkäufe zurückstellen, Risiko reduzieren "
-                                                 "(z. B. Gewinne sichern, Cash-Quote erhöhen). Historisch halbierte "
-                                                 "diese Regel die großen Einbrüche."]))
-    except Exception as exc:
-        warnings.append(f"Marktampel ({r.market_ticker}): {exc}")
-
-    # ---- Einzelwerte
-    bench_cache: dict[str, pd.Series] = {}
-    buy_tickers = []
     for _, w in watchlist.iterrows():
         t = w["ticker"]
+        name = w.get("name") or t
         try:
             px = prices(t)
             if len(px) < 30:
@@ -219,165 +243,83 @@ def scan(
             warnings.append(f"{t}: {exc}")
             continue
         last = len(px) - 1
-        name = w.get("name") or t
-        buys = [ev for ev in events if ev["kauf"] and ev["pos"] <= last]
-        today = [ev for ev in buys if ev["pos"] == last]
-        prior = [ev for ev in buys if ev["pos"] < last]
-        # jüngstes früheres Kaufsignal: nur dieses zählt für Notbremse/Haltedauer (neues Signal verlängert)
-        ref = prior[-1] if prior else None
-
-        for ev in today:  # Signal am letzten Handelstag -> Kauf zur nächsten Eröffnung
-            p = ev["pos"]
-            stop = px["close"].iloc[p] * (1 + r.emergency_stop)
-            until = (pd.Timestamp(ev["datum"]) + pd.tseries.offsets.BDay(r.hold_days)).date()
-            details = [
-                f"Gewinn je Aktie {ev['eps']} statt erwartet {ev['schaetzung']} "
-                f"(Überraschung {ev['surprise']:+.1f} %)".replace(".", ","),
-                f"Kursreaktion am Meldetag {_fmt_pct(ev['reaktion'])} gegenüber dem Markt",
-                "Historisch (279 Fälle seit 2002 bei diesen Aktien): in den 3 Monaten danach Ø +6,7 %, "
-                "das sind +5,1 % mehr als der Markt (nach normalen Quartalszahlen: +2,1 %). "
-                "In 67 % der Fälle positiv, schlechtester Fall −47 % (mit Notbremse −26 %).",
-            ]
-            if ref is not None and last - ref["pos"] <= r.hold_days:
-                details.append(f"Falls du die Aktie aus dem Kaufsignal vom {ref['datum']:%d.%m.%Y} noch hältst: "
-                               "weiter halten – die Haltedauer beginnt neu.")
-            alerts.append(Alert("kauf", f"KAUFEN: {name} nach starken Quartalszahlen", t, name, w.get("isin", ""),
-                                float(px["close"].iloc[p]), ev["datum"], details=details, stop=float(stop),
-                                halten_bis=until))
-            buy_tickers.append(t)
-
-        if ref is not None and not today:
-            p = ref["pos"]
-            held = px.iloc[p + 1:]  # ab Einstieg (Eröffnung am Folgetag)
-            entry = float(held["open"].iloc[0])
-            days_held = last - p
-            stop_px = entry * (1 + r.emergency_stop)
-            closes = held["close"].iloc[: r.hold_days]
-            broke = closes[closes < stop_px]
-            stopped_before = len(broke) and broke.index[0] < px.index[last]
-            if len(broke) and broke.index[0] == px.index[last] and days_held <= r.hold_days:
+        cur_ccy = currency_of(t)
+        for p in replay(px, events, r, since):
+            if p.buy_pos == last:
                 alerts.append(Alert(
-                    "verkauf", f"VERKAUFEN: {name} – Notbremse ausgelöst", t, name, w.get("isin", ""),
-                    float(px["close"].iloc[last]), px.index[last].date(),
-                    details=[f"Kaufsignal vom {ref['datum']:%d.%m.%Y}, Einstand an der Börse ca. {_fmt_px(entry)} "
-                             f"{currency_of(t)}",
-                             f"Schlusskurs {_fmt_px(float(px['close'].iloc[last]))} {currency_of(t)} = "
-                             f"{_fmt_pct(px['close'].iloc[last] / entry - 1)} – Verlust begrenzen."],
+                    "kauf", t, name, w.get("isin", ""), float(px["close"].iloc[last]), cur_ccy, px.index[last].date(),
+                    grund=(f"Die Quartalszahlen waren deutlich besser als erwartet (Gewinn {p.surprise:+.0f} % über der "
+                           f"Schätzung) und die Aktie stieg {p.reaction * 100:.0f} % stärker als der Gesamtmarkt."),
                 ))
-            elif days_held == r.hold_days and not stopped_before:
-                perf = px["close"].iloc[last] / entry - 1
-                alerts.append(Alert(
-                    "verkauf", f"VERKAUFEN: {name} – Haltedauer von 3 Monaten erreicht", t, name, w.get("isin", ""),
-                    float(px["close"].iloc[last]), px.index[last].date(),
-                    details=[f"Kaufsignal vom {ref['datum']:%d.%m.%Y}, Einstand an der Börse ca. {_fmt_px(entry)} "
-                             f"{currency_of(t)}",
-                             f"Ergebnis seit Einstieg: {_fmt_pct(perf)} (in {currency_of(t)}, ohne Wechselkurseffekt)",
-                             "Der typische Nachlauf nach Quartalszahlen ist vorbei – Position schließen "
-                             "(oder bewusst als Langfrist-Investment weiterhalten)."],
-                ))
-
-    for al in alerts:
-        if al.art != "markt" and not al.waehrung:
-            al.waehrung = currency_of(al.ticker)
-        elif al.art == "markt":
-            al.waehrung = "USD"
-
-    # ---- Kontext aus der Fundamentalanalyse für neue Kaufsignale
-    if analyzer is not None and buy_tickers:
-        try:
-            rep = analyzer.analyze(buy_tickers, as_of)
-            by_t = {a.ticker: a for a in rep.analyses}
-            for al in alerts:
-                a = by_t.get(al.ticker)
-                if al.art != "kauf" or a is None:
-                    continue
-                f = a.metrics["fundamental"]
-                pe = "Verlust" if f.get("eps_negative") else (f"{f['pe']:.1f}".replace(".", ",") if f.get("pe") else "–")
-                al.details.append(f"Gesamtanalyse: {a.recommendation.label}, Score {a.total_score:+.2f}, KGV {pe}".replace("Score +0.", "Score +0,").replace("Score -0.", "Score -0,"))
-                z = f.get("altman_z")
-                if z is not None and z < 1.81:
-                    al.details.append(f"⚠️ Altman Z {z:.2f}: erhöhtes Insolvenzrisiko – Position klein halten.")
-                for n in a.notes:
-                    al.details.append(f"⚠️ {n}")
-        except Exception as exc:
-            warnings.append(f"Fundamentalanalyse: {exc}")
-
-    if ampel == "rot":
-        for al in alerts:
-            if al.art == "kauf":
-                al.details.append("⚠️ Marktampel ist ROT – nur mit kleiner Position oder abwarten.")
-    return SignalReport(as_of, alerts, ampel, ampel_text, len(watchlist), warnings)
+            elif p.exit_pos == last:
+                res = float(px["close"].iloc[last] / p.entry - 1) if p.entry else None
+                grund = ("Die 3 Monate seit dem Kaufsignal sind vorbei." if p.exit_reason == "haltedauer" else
+                         "Die Aktie ist mehr als 15 % unter deinen Kaufkurs gefallen. Verkaufen begrenzt den Verlust.")
+                alerts.append(Alert("verkauf", t, name, w.get("isin", ""), float(px["close"].iloc[last]), cur_ccy,
+                                    px.index[last].date(), grund=grund, ergebnis=res))
+    # Verkäufe zuerst (Geld wird frei), dann Käufe
+    alerts.sort(key=lambda a: 0 if a.art == "verkauf" else 1)
+    return SignalReport(as_of, alerts, len(watchlist), betrag, warnings)
 
 
 # --------------------------------------------------------------------------- Mail
 def subject(rep: SignalReport) -> str:
-    k = [a.name for a in rep.alerts if a.art == "kauf"]
-    v = [a.name for a in rep.alerts if a.art == "verkauf"]
-    m = [a.titel for a in rep.alerts if a.art == "markt"]
-    parts = []
-    if m:
-        parts.append(m[0])
-    if k:
-        parts.append("Kauf: " + ", ".join(k))
-    if v:
-        parts.append("Verkauf: " + ", ".join(v))
-    return "Marktanalyse – " + " | ".join(parts) if parts else "Marktanalyse – keine Signale"
+    parts = [a.titel for a in rep.alerts]
+    return "Aktien-Signal – " + (" | ".join(parts) if parts else "keine Signale")
+
+
+def _betrag_text(rep: SignalReport) -> str:
+    if rep.betrag:
+        return f"für {_fmt_eur(rep.betrag)}"
+    return "für deinen festen Betrag pro Kauf (Faustregel: ein Sechstel deines Aktien-Budgets)"
 
 
 def to_html(rep: SignalReport) -> str:
     e = html.escape
-    color = {"kauf": "#1a7f37", "verkauf": "#cf222e", "markt": "#9a6700"}
     blocks = []
     for a in rep.alerts:
-        rows = "".join(f"<li>{e(d)}</li>" for d in a.details)
-        meta = []
-        if a.isin:
-            meta.append(f"ISIN <b>{e(a.isin)}</b> (in Trade Republic suchen)")
-        if a.ticker:
-            meta.append(f"Ticker {e(a.ticker)}")
-        if a.kurs is not None:
-            meta.append(f"Schlusskurs {e(_fmt_px(a.kurs))} {e(a.waehrung)}" + (f" am {a.datum:%d.%m.%Y}" if a.datum else ""))
-        plan = ""
         if a.art == "kauf":
-            plan = (f"<p><b>Plan:</b> heute kaufen · <b>Notbremse: Stop-Loss 15 % unter deinem Kaufkurs</b> setzen "
-                    f"(bei Trade Republic in EUR; Referenz Börse: {e(_fmt_px(a.stop))} {e(a.waehrung)}) · "
-                    f"Haltedauer bis ca. <b>{a.halten_bis:%d.%m.%Y}</b> – du bekommst dann eine Verkaufsmail.</p>")
+            col = "#1a7f37"
+            todo = (f"Trade Republic öffnen → nach <b>{e(a.isin or a.ticker)}</b> suchen → <b>Kaufen</b> "
+                    f"{e(_betrag_text(rep))}.")
+            after = "Danach einfach <b>halten</b>. Du bekommst eine Mail, wenn du verkaufen sollst (meist nach etwa 3 Monaten)."
+        else:
+            col = "#cf222e"
+            todo = f"Trade Republic öffnen → <b>{e(a.name)}</b> in deinem Depot antippen → <b>alles verkaufen</b>."
+            after = ""
+            if a.ergebnis is not None:
+                after = f"Ergebnis seit dem Kauf: <b>{e(_fmt_pct(a.ergebnis, 0))}</b> (ungefähr, ohne Wechselkurs und Gebühren)."
         blocks.append(
-            f'<div style="border-left:4px solid {color[a.art]};padding:4px 12px;margin:14px 0">'
-            f'<h3 style="margin:4px 0;color:{color[a.art]}">{e(a.titel)}</h3>'
-            f'<p style="margin:4px 0;color:#555">{" · ".join(meta)}</p><ul>{rows}</ul>{plan}</div>'
+            f'<div style="border-left:6px solid {col};padding:6px 14px;margin:16px 0">'
+            f'<h2 style="margin:4px 0;color:{col}">{e(a.titel)}</h2>'
+            f"<p><b>So geht's:</b> {todo}</p>"
+            + (f"<p>{after}</p>" if after else "")
+            + f'<p style="color:#666">Grund: {e(a.grund)}</p></div>'
         )
-    ampel_col = {"grün": "#1a7f37", "rot": "#cf222e"}.get(rep.marktampel, "#555")
-    warn = "".join(f"<li>{e(w)}</li>" for w in rep.warnungen)
     return (
-        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;max-width:640px">'
-        f"<h2>Signale zum {rep.as_of:%d.%m.%Y}</h2>"
-        f'<p>Marktampel: <b style="color:{ampel_col}">{e(rep.marktampel.upper())}</b> – {e(rep.marktampel_text)}</p>'
+        '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;max-width:600px">'
         + "".join(blocks)
-        + (f"<p style='color:#888'>Datenhinweise:</p><ul style='color:#888'>{warn}</ul>" if warn else "")
-        + f"<p style='color:#888;font-size:12px'>Geprüft: {rep.geprueft} Werte der Beobachtungsliste. "
-        "Automatisch erzeugte, regelbasierte Signale – keine Anlageberatung. Ausführung zum Eröffnungskurs, "
-        "Ordergebühren und Steuern sind nicht berücksichtigt.</p></div>"
+        + '<p style="color:#888;font-size:12px">Deine Regel: Kaufmail → kaufen und halten. Verkaufsmail → verkaufen. '
+        f"Stand: Börsenschluss {rep.as_of:%d.%m.%Y}. Automatisch erzeugt, keine Anlageberatung.</p></div>"
     )
 
 
 def to_text(rep: SignalReport) -> str:
-    lines = [f"Signale zum {rep.as_of:%d.%m.%Y}", f"Marktampel: {rep.marktampel.upper()} – {rep.marktampel_text}", ""]
+    lines = []
     for a in rep.alerts:
         lines.append(a.titel)
-        if a.isin:
-            lines.append(f"  ISIN {a.isin} | Ticker {a.ticker}")
-        if a.kurs is not None:
-            lines.append(f"  Schlusskurs {_fmt_px(a.kurs)} {a.waehrung}")
-        lines += [f"  - {d}" for d in a.details]
         if a.art == "kauf":
-            lines.append(f"  Plan: kaufen, Stop-Loss 15 % unter deinem Kaufkurs (Referenz {_fmt_px(a.stop)} "
-                         f"{a.waehrung}), halten bis ca. {a.halten_bis:%d.%m.%Y}")
+            lines.append(f"So geht's: Trade Republic öffnen, nach {a.isin or a.ticker} suchen, kaufen {_betrag_text(rep)}.")
+            lines.append("Danach einfach halten. Du bekommst eine Mail, wenn du verkaufen sollst (meist nach etwa 3 Monaten).")
+        else:
+            lines.append(f"So geht's: Trade Republic öffnen, {a.name} im Depot antippen, alles verkaufen.")
+            if a.ergebnis is not None:
+                lines.append(f"Ergebnis seit dem Kauf: {_fmt_pct(a.ergebnis, 0)} (ungefähr).")
+        lines.append(f"Grund: {a.grund}")
         lines.append("")
     if not rep.alerts:
-        lines.append("Keine deutlichen Signale.")
-    lines += [f"! {w}" for w in rep.warnungen]
-    lines.append("Keine Anlageberatung.")
+        lines.append("Keine Signale.")
+    lines.append("Deine Regel: Kaufmail -> kaufen und halten. Verkaufsmail -> verkaufen. Keine Anlageberatung.")
     return "\n".join(lines)
 
 
@@ -401,7 +343,7 @@ def send_smtp(rep: SignalReport, to: Optional[str] = None) -> bool:
     msg["To"] = to
     msg.attach(MIMEText(to_text(rep), "plain", "utf-8"))
     msg.attach(MIMEText(to_html(rep), "html", "utf-8"))
-    port = int(os.environ.get("SMTP_PORT", "587"))
+    port = int(os.environ.get("SMTP_PORT") or "587")
     with smtplib.SMTP(host, port, timeout=30) as s:
         s.starttls()
         if os.environ.get("SMTP_USER"):
@@ -411,14 +353,20 @@ def send_smtp(rep: SignalReport, to: Optional[str] = None) -> bool:
 
 
 # --------------------------------------------------------------------------- Studie
+def _stats(equity: pd.Series) -> dict:
+    e = equity.dropna()
+    years = (e.index[-1] - e.index[0]).days / 365.25
+    cagr = e.iloc[-1] ** (1 / years) - 1 if years > 0 else 0.0
+    return {"cagr": float(cagr), "max_dd": float((e / e.cummax() - 1).min()), "gesamt": float(e.iloc[-1] - 1)}
+
+
 def study(provider: DataProvider, watchlist: pd.DataFrame, start: date, end: Optional[date] = None,
           rules: Optional[SignalRules] = None) -> tuple[pd.DataFrame, str]:
-    """Wiederholt die Ereignisstudie: Was passierte nach jedem Kaufsignal (mit/ohne Notbremse)?"""
-    from .timing import perf, simulate
-
+    """Historische Prüfung: (1) jedes Kaufsignal einzeln, (2) Depot, wenn man jede Mail befolgt hätte."""
     r = rules or SignalRules()
     end = end or date.today()
-    rows = []
+    rows, trades = [], []
+    closes: dict[str, pd.Series] = {}
     benches: dict[str, pd.Series] = {}
     for _, w in watchlist.iterrows():
         t = w["ticker"]
@@ -432,6 +380,7 @@ def study(provider: DataProvider, watchlist: pd.DataFrame, start: date, end: Opt
         except Exception as exc:
             log.warning("%s: %s", t, exc)
             continue
+        closes[t] = px["close"]
         for e in ev:
             p = e["pos"]
             if p + r.hold_days >= len(px):
@@ -443,37 +392,86 @@ def study(provider: DataProvider, watchlist: pd.DataFrame, start: date, end: Opt
                 if px["close"].iloc[j] < entry * (1 + r.emergency_stop):
                     stop_exit = px["open"].iloc[j + 1]
                     break
-            market = b.iloc[p + r.hold_days] / b.iloc[p] - 1
             rows.append({**{k: v for k, v in e.items() if k != "pos"}, "ticker": t,
                          "rendite": exit_close / entry - 1,
                          "rendite_notbremse": (stop_exit if stop_exit is not None else exit_close) / entry - 1,
-                         "markt": market})
+                         "markt": b.iloc[p + r.hold_days] / b.iloc[p] - 1})
+        for pos in replay(px, ev, r):
+            if pos.exit_pos is None or pos.exit_pos + 1 >= len(px):
+                continue
+            trades.append({"ticker": t, "kauf": px.index[pos.buy_pos + 1], "verkauf": px.index[pos.exit_pos + 1],
+                           "entry": pos.entry, "exit": float(px["open"].iloc[pos.exit_pos + 1]),
+                           "grund": pos.exit_reason})
     df = pd.DataFrame(rows)
     if df.empty:
         return df, "Keine Ereignisse gefunden."
     df["ueber_markt"] = df["rendite"] - df["markt"]
     buy = df[df["kauf"]]
 
-    def line(name, g, col="ueber_markt"):
-        return (f"| {name} | {len(g)} | {g['rendite'].mean() * 100:+.1f} % | {g[col].mean() * 100:+.1f} % | "
+    def line(name, g):
+        return (f"| {name} | {len(g)} | {g['rendite'].mean() * 100:+.1f} % | {g['ueber_markt'].mean() * 100:+.1f} % | "
                 f"{(g['rendite'] > 0).mean():.0%} | {g['rendite'].min() * 100:+.0f} % |")
 
-    md = ["| Gruppe | Fälle | Ø Rendite 3 Mon. | Ø vs. Markt | Anteil positiv | schlechtester Fall |",
+    md = ["### Jedes Kaufsignal einzeln (3 Monate gehalten)", "",
+          "| Gruppe | Fälle | Ø Rendite 3 Mon. | Ø vs. Markt | Anteil positiv | schlechtester Fall |",
           "|---|---:|---:|---:|---:|---:|", line("Alle Quartalszahlen", df), line("**Kaufsignal**", buy)]
     if len(buy):
         g = buy.assign(rendite=buy["rendite_notbremse"])
         md.append(line("Kaufsignal mit Notbremse −15 %", g.assign(ueber_markt=g["rendite"] - g["markt"])))
-    md.append("")
-    md.append("| Marktampel | CAGR | Max. Drawdown | Sharpe | Halten: CAGR | Halten: Max. DD |")
-    md.append("|---|---:|---:|---:|---:|---:|")
-    for t in (r.market_ticker, r.bench_us, r.bench_other):
-        try:
-            m = normalize_prices(provider.prices(t, start, end))
-            sim = simulate(m, use_stop=False)
-            s0 = sim.equity.index[min(200, len(m) - 1)]
-            a, h = perf(sim.equity[s0:] / sim.equity[s0]), perf(sim.buy_hold[s0:] / sim.buy_hold[s0])
-            md.append(f"| {t} ab {s0:%Y} | {a['cagr'] * 100:.1f} % | {a['max_dd'] * 100:.0f} % | {a['sharpe']:.2f} | "
-                      f"{h['cagr'] * 100:.1f} % | {h['max_dd'] * 100:.0f} % |")
-        except Exception as exc:
-            md.append(f"| {t} | Fehler: {exc} | | | | |")
+
+    # ---- Depot-Simulation: Budget in r.slots Teile, jede Mail befolgt
+    tr = pd.DataFrame(trades)
+    if not tr.empty:
+        tr = tr.sort_values("kauf")
+        cal = pd.DatetimeIndex(sorted(set().union(*[s.index for s in closes.values()])))
+        cal = cal[cal >= tr["kauf"].min()]
+        px_all = pd.DataFrame({t: s.reindex(cal).ffill() for t, s in closes.items()})
+        cash, hold, skipped, taken = 1.0, {}, 0, 0
+        eq, inv = [], []
+        entries = {d: g for d, g in tr.groupby("kauf")}
+        exits = {d: g for d, g in tr.groupby("verkauf")}
+        for d in cal:
+            if d in exits:
+                for _, x in exits[d].iterrows():
+                    key = (x["ticker"], x["kauf"])
+                    if key in hold:
+                        val, last_px = hold.pop(key)
+                        cash += val * x["exit"] / last_px * (1 - r.cost_per_side)
+            for key in list(hold):
+                val, last_px = hold[key]
+                now = px_all.at[d, key[0]]
+                if pd.notna(now):
+                    hold[key] = (val * now / last_px, now)
+            total = cash + sum(v for v, _ in hold.values())
+            if d in entries:
+                for _, x in entries[d].iterrows():
+                    if len(hold) >= r.slots:
+                        skipped += 1
+                        continue
+                    alloc = min(cash, total / r.slots)
+                    cash -= alloc
+                    now = px_all.at[d, x["ticker"]]
+                    hold[(x["ticker"], x["kauf"])] = (alloc * (1 - r.cost_per_side) * now / x["entry"], now)
+                    taken += 1
+            eq.append(cash + sum(v for v, _ in hold.values()))
+            inv.append(1 - cash / eq[-1] if eq[-1] else 0.0)
+        equity = pd.Series(eq, index=cal)
+        s = _stats(equity)
+        md += ["", f"### Depot, wenn man jede Mail befolgt hätte (ab {cal[0]:%m/%Y}, Budget ÷ {r.slots}, "
+                   "0,1 % Kosten je Kauf/Verkauf, Cash ohne Zinsen)", "",
+               "| | Rendite p. a. | Gesamt | größter Einbruch |", "|---|---:|---:|---:|",
+               f"| **Signal-Strategie** ({taken} Käufe, {skipped} mangels freiem Budgetteil ausgelassen) | "
+               f"{s['cagr'] * 100:.1f} % | {s['gesamt'] * 100:+.0f} % | {s['max_dd'] * 100:.0f} % |"]
+        ew = px_all.pct_change().mean(axis=1).fillna(0).add(1).cumprod()
+        s2 = _stats(ew)
+        md.append(f"| Alle Listenwerte gleichgewichtet halten | {s2['cagr'] * 100:.1f} % | {s2['gesamt'] * 100:+.0f} % | "
+                  f"{s2['max_dd'] * 100:.0f} % |")
+        for bt, label in ((r.bench_us, "S&P 500 halten (ohne Dividenden)"), (r.bench_other, "DAX halten")):
+            bs = benches.get(bt)
+            if bs is not None:
+                bs = bs.reindex(cal).ffill().dropna()
+                s3 = _stats(bs / bs.iloc[0])
+                md.append(f"| {label} | {s3['cagr'] * 100:.1f} % | {s3['gesamt'] * 100:+.0f} % | {s3['max_dd'] * 100:.0f} % |")
+        md += ["", f"Im Schnitt waren {np.mean(inv):.0%} des Budgets investiert, der Rest lag als Cash bereit "
+                   "(z. B. auf dem Verrechnungskonto mit Zinsen – in der Simulation nicht berücksichtigt)."]
     return df, "\n".join(md)

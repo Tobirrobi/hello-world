@@ -1,52 +1,42 @@
-# Signal-Wächter: tägliche Kauf-/Verkaufssignale per Mail
+# Signal-Wächter: Kaufmail und Verkaufsmail
 
-Der Signal-Wächter (`marktanalyse signale`) prüft jeden Handelstag die Werte aus `beobachtungsliste.csv` und meldet
-**nur deutliche Signale**: Er verschickt eine Mail, wenn es etwas zu tun gibt, an allen anderen Tagen bleibt er still.
+Der Signal-Wächter prüft jeden Handelstag die 23 Werte aus `beobachtungsliste.csv` und schickt nur dann eine Mail,
+wenn etwas zu tun ist.
 
-> Keine Anlageberatung. Alle Zahlen stammen aus historischen Tests mit den heutigen Listenwerten
-> (Survivorship-Bias: Es sind die Gewinner von heute). Zukünftige Ergebnisse können deutlich schlechter sein.
+## Die Regel (für Einsteiger)
 
-## Die Signale
+| Mail | Was du tust |
+|---|---|
+| 🟢 **KAUFEN: Firma** | In Trade Republic nach der ISIN aus der Mail suchen und für deinen festen Betrag kaufen. Dann einfach halten. |
+| 🔴 **VERKAUFEN: Firma** | In Trade Republic die Aktie im Depot antippen und alles verkaufen. |
 
-| Signal | Bedingung | Was tun |
-|---|---|---|
-| 🟢 **KAUFEN nach starken Quartalszahlen** | Gewinn je Aktie ≥ 5 % über der Analystenschätzung **und** Kurs am Meldetag ≥ 3 % besser als der Markt | Am Morgen nach der Meldung kaufen, Notbremse −15 %, ca. 3 Monate halten |
-| 🔴 **VERKAUFEN – Haltedauer erreicht** | 63 Handelstage (≈ 3 Monate) nach dem Kaufsignal | Position schließen (der Nachlauf ist vorbei) |
-| 🔴 **VERKAUFEN – Notbremse** | Schlusskurs fällt > 15 % unter den Einstand | Verlust begrenzen |
-| 🟡 **Marktampel ROT / GRÜN** | MSCI World (URTH) fällt > 2 % unter bzw. steigt > 2 % über seine 200-Tage-Linie | Rot: neue Käufe zurückstellen, Risiko senken · Grün: wieder normal investieren |
+Sonst nichts: keine Stop-Orders einstellen, keine Kurse beobachten, nicht nachkaufen.
 
-Ein neues Kaufsignal während der Haltedauer verlängert diese; ein widersprüchliches Verkaufssignal wird dann nicht
-gemeldet. Für jedes Kaufsignal hängt der Wächter Kontext aus der Fundamentalanalyse an (Empfehlung, Score, KGV,
-Warnungen wie Insolvenzrisiko).
+**Fester Betrag:** Teile das Geld, das du in Aktien stecken willst, in **6 gleiche Teile**. Pro Kaufmail kaufst du für einen
+Teil. In der Vergangenheit waren meist 3, selten mehr als 5 Aktien gleichzeitig im Depot. Sind ausnahmsweise alle 6 Teile
+investiert, lässt du die Kaufmail aus.
 
-**Kein Short-Signal**: Keines der getesteten Short-Signale hatte einen Vorteil (siehe unten). Bei Trade Republic
-ginge Shorten ohnehin nur über Hebelprodukte (Knock-outs) mit hohem Risiko.
+> Keine Anlageberatung. Alle Zahlen stammen aus historischen Tests mit den heutigen Listenwerten. Das sind die Gewinner
+> von heute (Survivorship-Bias), zukünftige Ergebnisse können deutlich schlechter sein. Investiere nur Geld, auf das du
+> verzichten kannst.
 
-## Warum genau diese Signale? Ergebnisse der Tests
+## Wann kommt welche Mail?
 
-### 1. Klassische Chartsignale: kein Vorteil
+* **Kaufmail:** Die Firma hat Quartalszahlen gemeldet. Der Gewinn je Aktie lag **mindestens 5 % über der Erwartung der
+  Analysten** und die Aktie stieg am Tag der Meldung **mindestens 3 % stärker als der Gesamtmarkt**. Solche Aktien laufen
+  oft noch wochenlang weiter gut (Fachbegriff: Post-Earnings-Drift).
+* **Verkaufsmail**, sobald eins davon eintritt:
+  * **3 Monate** (63 Handelstage) nach dem Kaufsignal: Der Effekt ist dann vorbei.
+  * **Notbremse:** Die Aktie liegt mehr als **15 % unter dem Kaufkurs**. Das begrenzt Verluste.
+* Kommt für eine Aktie, die du schon hast, erneut ein Kaufsignal, gibt es **keine** Mail. Du hältst einfach weiter, die
+  3 Monate beginnen neu.
+* Verkaufsmails gibt es nur für Aktien, zu denen du eine Kaufmail bekommen hast (Start: 16.11.2026).
 
-Ereignisstudie über 23 Aktien, 2001–2026. Die Werte zeigen die Rendite nach dem Signal **minus** die normale
-Rendite derselben Aktie:
-
-| Signal | Fälle | nach 3 Monaten | nach 12 Monaten |
-|---|---:|---:|---:|
-| Trendwende über 200-Tage-Linie | 866 | −0,7 % | −1,4 % |
-| Rücksetzer im Aufwärtstrend (RSI > 30) | 263 | −0,3 % | −0,7 % |
-| Golden Cross (SMA50 > SMA200) | 397 | −0,8 % | −0,5 % |
-| Ausbruch auf 52-Wochen-Hoch | 416 | 0,0 % | +0,2 % |
-| Trendbruch unter 200-Tage-Linie | 861 | +0,3 % | −1,1 % |
-| Death Cross | 393 | +0,8 % | −0,8 % |
-| Erholung im Abwärtstrend (Short-Idee) | 143 | **+2,3 %** (Short hätte verloren) | +4,1 % |
-
-Alle Abweichungen liegen im Bereich des Zufalls. Als Mail-Signal für Einzelaktien sind diese Regeln daher ungeeignet.
-Auch eine Trendfolge-Strategie je Aktie (nur über der 200-Tage-Linie investiert) halbierte die Rendite
-(Median 6,6 % statt 13,0 % p. a.). Die Verluste in Crashs sanken dabei zwar (Median −51 % statt −77 %), ein
-zusätzlicher Trailing-Stop machte es aber nur schlechter.
-
-### 2. Gewinnüberraschungen: belegter Vorteil (Post-Earnings-Drift)
+## Wie gut hat das früher funktioniert?
 
 Reproduzierbar mit `marktanalyse signal-studie --start 2000-01-01` (Stand 16.11.2026):
+
+### Jedes Kaufsignal einzeln (3 Monate gehalten)
 
 | Gruppe | Fälle | Ø Rendite 3 Mon. | Ø vs. Markt | Anteil positiv | schlechtester Fall |
 |---|---:|---:|---:|---:|---:|
@@ -54,60 +44,64 @@ Reproduzierbar mit `marktanalyse signal-studie --start 2000-01-01` (Stand 16.11.
 | **Kaufsignal** | 279 | +6.7 % | +5.1 % | 67% | -47 % |
 | Kaufsignal mit Notbremse −15 % | 279 | +5.3 % | +3.6 % | 64% | -26 % |
 
-| Marktampel | CAGR | Max. Drawdown | Sharpe | Halten: CAGR | Halten: Max. DD |
-|---|---:|---:|---:|---:|---:|
-| URTH ab 2012 | 8.6 % | -22 % | 0.70 | 11.9 % | -34 % |
-| ^GSPC ab 2000 | 6.0 % | -23 % | 0.55 | 6.8 % | -57 % |
-| ^GDAXI ab 2000 | 6.9 % | -25 % | 0.51 | 5.5 % | -69 % |
+### Depot, wenn man jede Mail befolgt hätte (ab 04/2002, Budget ÷ 6, 0,1 % Kosten je Kauf/Verkauf, Cash ohne Zinsen)
 
-* Nach einem Kaufsignal lief die Aktie in den 3 Monaten im Schnitt **+5,1 % besser als der Markt**, nach normalen
-  Quartalszahlen nur +2,1 %. Der Vorteil von rund +3 Prozentpunkten zeigte sich vor und nach 2015.
-* Die Notbremse bei −15 % kostet im Schnitt etwa 1,4 Prozentpunkte, begrenzt aber den schlimmsten Fall von −47 % auf −26 %.
-* Engere Stops (2–3 ATR, −10 %) schnitten schlechter ab, weil sie zu oft durch normale Schwankungen auslösten.
-* Gegenrichtung: Nach deutlich verfehlten Erwartungen mit Kurseinbruch lief die Aktie **nicht** schlechter als der
-  Markt. Daraus wurde deshalb kein Verkaufs- oder Short-Signal.
+| | Rendite p. a. | Gesamt | größter Einbruch |
+|---|---:|---:|---:|
+| **Signal-Strategie** (249 Käufe, 4 mangels freiem Budgetteil ausgelassen) | 10.3 % | +1002 % | -37 % |
+| Alle Listenwerte gleichgewichtet halten | 22.2 % | +13823 % | -52 % |
+| S&P 500 halten (ohne Dividenden) | 8.1 % | +572 % | -57 % |
+| DAX halten | 6.8 % | +408 % | -58 % |
 
-### 3. Marktampel: weniger Absturzrisiko
+Im Schnitt waren 44% des Budgets investiert, der Rest lag als Cash bereit (z. B. auf dem Verrechnungskonto mit Zinsen – in der Simulation nicht berücksichtigt).
 
-Trendfolge auf Indexebene (siehe zweite Tabelle oben) halbierte bis drittelte die maximalen Einbrüche. Die Rendite
-lag mal etwas darunter (S&P 500, MSCI World), mal darüber (DAX). Die Ampel wechselt im Schnitt etwa 2-mal pro Jahr.
+**Einordnung:**
+* Die Signal-Strategie brachte gut 10 % pro Jahr, mit deutlich kleineren Einbrüchen als die Indizes
+  (−37 % statt −57 %). Dabei war im Schnitt weniger als die Hälfte des Geldes investiert.
+* Ein breiter **ETF (z. B. S&P 500 oder MSCI World) mit Dividenden** hätte über die Zeit ungefähr ähnlich viel gebracht,
+  bei größeren Schwankungen und ganz ohne Aufwand. Für viele Einsteiger ist ein ETF-Sparplan die einfachere Basis; die
+  Signale können eine Ergänzung sein.
+* „Alle Listenwerte halten“ sieht spektakulär aus, ist aber nicht erreichbar: Niemand wusste 2002, dass genau diese
+  Firmen (z. B. NVIDIA) die Gewinner werden.
 
-## Hinweise für Trade Republic
+## Was getestet und bewusst weggelassen wurde
 
-* Kurse und Referenzwerte in der Mail stehen in der Börsenwährung (USD bei US-Aktien, DKK bei Novo Nordisk).
-  Trade Republic zeigt Euro. Die Notbremse deshalb als **Stop-Loss 15 % unter deinem eigenen Kaufkurs** setzen.
-* Das Signal „Notbremse ausgelöst“ wird auf Basis des Börsenkurses berechnet. Durch Wechselkursschwankungen kann
-  deine Stop-Order bei Trade Republic etwas früher oder später auslösen.
-* Gesucht und gehandelt wird am einfachsten über die ISIN aus der Mail.
+* **Klassische Chartsignale** (Trendwende an der 200-Tage-Linie, RSI-Rücksetzer, Golden/Death Cross, 52-Wochen-Hoch,
+  Trendbruch): In einer Ereignisstudie über 23 Aktien 2001–2026 lag die Rendite danach nicht spürbar über oder unter dem
+  Normalen. Diese Signale wären reines Rauschen.
+* **Trailing-Stop / enge Stops (2–3 ATR, −10 %):** Sie schnitten schlechter ab als die Notbremse bei −15 %, weil sie bei
+  normalen Schwankungen auslösen.
+* **Marktampel** (Index über/unter der 200-Tage-Linie): Sie verringert große Einbrüche bei Index-Investments. Für die
+  Kaufsignale brachte sie aber nichts, denn Kaufsignale in schwachen Marktphasen liefen nicht schlechter. Für die
+  Einfachheit ist sie deshalb nicht Teil der Mails.
+* **Short-Signale:** Keines hatte einen Vorteil. Bei Trade Republic wären sie ohnehin nur über Hebelprodukte möglich.
 
 ## Häufigkeit
 
-Rückblickend Juli bis November 2026: 12 Meldungen (5 Käufe, 7 Verkäufe), also etwa 2–3 Mails pro Monat. Rund um die
-Berichtssaisons (Ende Januar, April, Juli, Oktober) kommen sie gehäuft.
+Rückblickend Juli bis November 2026: 8 Mails (5 Käufe, 3 Verkäufe), also etwa 1–3 pro Monat, gehäuft in den
+Berichtssaisons (Ende Januar, April, Juli, Oktober). An den übrigen Tagen kommt nichts.
 
 ## Beobachtungsliste
 
-`beobachtungsliste.csv`: 23 liquide Qualitäts- und Wachstumswerte, alle bei Trade Republic handelbar (Suche per
-ISIN), verteilt auf Branchen und Regionen:
+`beobachtungsliste.csv`: 23 große, liquide Werte, alle bei Trade Republic handelbar (Suche per ISIN):
 
 * **Deutschland:** SAP, Siemens, Allianz, Münchener Rück, Deutsche Telekom, Rheinmetall, Infineon, Deutsche Börse, Mercedes-Benz
 * **Europa:** ASML, Airbus, Novo Nordisk
 * **USA:** Apple, Microsoft, NVIDIA, Amazon, Alphabet, Meta, JPMorgan, Visa, Eli Lilly, Costco, ExxonMobil
 
-Begründung: Große, liquide Werte haben enge Spreads (wichtig bei Trade Republic, Ausführung über LS Exchange),
-regelmäßige Analystenschätzungen (Voraussetzung für das Quartalszahlen-Signal) und gute Datenqualität bei Yahoo.
-Die Liste lässt sich frei ändern. Voraussetzung für Kaufsignale: Yahoo muss Gewinnschätzungen liefern (für LVMH, Hermès
-und L'Oréal z. B. nicht, daher sind sie nicht in der Liste).
+Begründung: enge Spreads beim Handel, regelmäßige Analystenschätzungen (Voraussetzung für das Signal) und gute
+Datenqualität. Die Liste lässt sich ändern; für neue Werte muss Yahoo Gewinnschätzungen liefern (für LVMH, Hermès und
+L'Oréal z. B. nicht).
 
-## Täglicher Lauf und Mail
+## Täglicher Lauf
 
-* **Zeitpunkt:** werktags 6:47 Uhr (Europe/Berlin). Ausgewertet wird der letzte abgeschlossene Handelstag, eine Kauforder
-  ist also vor bzw. bei Handelsbeginn möglich.
-* **Variante A (eingerichtet):** eine geplante Claude-Aufgabe weckt werktags um 6:47 Uhr die Claude-Sitzung, in der das
-  Tool entstanden ist. Die Sitzung führt `marktanalyse signale` aus und mailt bei Signalen über das verbundene
-  Gmail-Konto. Verwalten oder abschalten lässt sich das in claude.ai unter den geplanten Aufgaben.
-* **Variante B:** GitHub Actions (`.github/workflows/marktanalyse.yml`) mit SMTP. Dafür im Repository unter
-  Settings → Secrets die Werte `MAIL_TO`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` und `SMTP_PASSWORD` hinterlegen,
-  z. B. ein Gmail-App-Passwort. Nur eine der beiden Varianten nutzen, sonst kommen Mails doppelt.
-* **Variante C:** auf dem eigenen Rechner per cron oder Aufgabenplanung:
-  `marktanalyse signale --smtp` mit denselben Umgebungsvariablen.
+* **Zeitpunkt:** werktags 6:47 Uhr (Europe/Berlin). Ausgewertet wird der letzte abgeschlossene Börsentag, gekauft bzw.
+  verkauft wird dann im Laufe des Tages.
+* **Eingerichtet:** Eine geplante Claude-Aufgabe weckt werktags die Claude-Sitzung, in der das Tool entstanden ist. Sie
+  führt `marktanalyse signale --seit 2026-11-16` aus und mailt bei Signalen über das verbundene Gmail-Konto. Verwalten
+  oder abschalten lässt sich das in claude.ai unter den geplanten Aufgaben.
+* **Alternative:** GitHub Actions (`.github/workflows/marktanalyse.yml`) mit SMTP. Dafür im Repository unter
+  Settings → Secrets die Werte `MAIL_TO`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` und `SMTP_PASSWORD` hinterlegen
+  (z. B. ein Gmail-App-Passwort). Nur eine Variante nutzen, sonst kommen Mails doppelt.
+* Kurse in der Studie stehen in der Börsenwährung (USD bei US-Aktien). Dein Ergebnis bei Trade Republic in Euro weicht
+  wegen des Wechselkurses etwas ab.
