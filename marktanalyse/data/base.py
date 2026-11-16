@@ -84,6 +84,16 @@ class CachedProvider(DataProvider):
             self._sent[ticker] = self.inner.market_sentiment(ticker)
         return self._sent[ticker]
 
+    def earnings_history(self, ticker, limit: int = 12):
+        if not hasattr(self.inner, "earnings_history"):
+            return None
+        key = (ticker, limit)
+        if not hasattr(self, "_earn"):
+            self._earn = {}
+        if key not in self._earn:
+            self._earn[key] = self.inner.earnings_history(ticker, limit)
+        return self._earn[key]
+
     def news(self, ticker, start, end):
         if ticker not in self._news:
             self._news[ticker] = self.inner.news(

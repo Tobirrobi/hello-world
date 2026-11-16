@@ -10,6 +10,23 @@ eine Strategie für die aktuelle Marktphase.
 > ⚠️ Keine Anlageberatung. Die Analyse ist automatisch und regelbasiert; Daten können fehlerhaft sein.
 > Leerverkäufe bergen ein unbegrenztes Verlustrisiko.
 
+## Signal-Wächter: tägliche Mail bei deutlichen Signalen
+
+```bash
+marktanalyse signale                      # prüft beobachtungsliste.csv für den letzten Handelstag
+marktanalyse signale --smtp               # … und mailt bei Signalen (SMTP-Variablen siehe docs/SIGNALE.md)
+marktanalyse signal-studie --start 2000-01-01   # historische Prüfung der Signale
+```
+
+Gemeldet werden nur Signale mit historisch belegtem Vorteil:
+* **Kauf nach starken Quartalszahlen**: Gewinnüberraschung ≥ 5 % und Kursreaktion ≥ 3 % über dem Markt.
+  Danach lief die Aktie seit 2002 im Schnitt +5,1 % besser als der Markt in 3 Monaten (normal: +2,1 %).
+* **Verkauf** nach 3 Monaten Haltedauer oder bei der Notbremse (−15 %).
+* **Marktampel** für den MSCI World (200-Tage-Linie), die die großen Einbrüche deutlich verringerte.
+
+Klassische Chartsignale wie Golden Cross, RSI oder Trendbruch hatten bei Einzelaktien keinen Vorteil und werden
+deshalb nicht gemeldet. Details und alle Testergebnisse: **[docs/SIGNALE.md](docs/SIGNALE.md)**.
+
 ## Was das Tool macht
 
 ```

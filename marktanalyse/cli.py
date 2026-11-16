@@ -167,6 +167,42 @@ def cmd_demo(args) -> None:
     print(f"\nReports gespeichert in {out}/ (Markdown + JSON)")
 
 
+def cmd_signale(args) -> None:
+    from datetime import timedelta
+
+    from .signale import load_watchlist, scan, send_smtp, subject, to_html, to_json
+    from .signale import to_text as sig_text
+
+    wl = load_watchlist(args.liste)
+    prov = make_provider(args.provider, args.data_dir)
+    analyzer = None if args.ohne_analyse else Analyzer(prov, "URTH", load_config(args.config))
+    as_of = args.as_of or (date.today() - timedelta(days=1))
+    rep = scan(prov, wl, as_of, analyzer=analyzer)
+    print(subject(rep))
+    print(sig_text(rep))
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(to_json(rep), encoding="utf-8")
+    if args.html:
+        Path(args.html).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.html).write_text(to_html(rep), encoding="utf-8")
+    if args.smtp and rep.has_signals:
+        print("Mail versendet." if send_smtp(rep) else "Mail NICHT versendet (SMTP nicht konfiguriert).")
+
+
+def cmd_signal_studie(args) -> None:
+    from .signale import load_watchlist, study
+
+    wl = load_watchlist(args.liste)
+    df, md = study(make_provider(args.provider, args.data_dir), wl, args.start, args.end)
+    print(md)
+    if args.output:
+        out = Path(args.output)
+        out.mkdir(parents=True, exist_ok=True)
+        df.to_csv(out / "signal_ereignisse.csv", index=False)
+        (out / "signal_studie.md").write_text(md + "\n", encoding="utf-8")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="marktanalyse", description="Regelbasierte Aktienmarktanalyse mit Long-/Short-Empfehlungen")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -201,6 +237,27 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--target", default="daten", help="Zielverzeichnis (Standard: daten)")
     r.add_argument("--history-days", type=int, default=800)
     r.set_defaults(func=cmd_archive)
+
+    g = sub.add_parser("signale", help="Signal-Wächter: deutliche Kauf-/Verkaufssignale der Beobachtungsliste (für tägliche Mail)")
+    g.add_argument("--liste", default="beobachtungsliste.csv", help="CSV mit ticker,isin,name,region")
+    g.add_argument("--provider", default="yahoo", choices=["yahoo", "csv", "demo"])
+    g.add_argument("--data-dir")
+    g.add_argument("--config")
+    g.add_argument("--as-of", type=_date, help="Stichtag (Standard: gestern = letzter abgeschlossener Handelstag)")
+    g.add_argument("--json", help="Ergebnis als JSON (inkl. Betreff, HTML, Text) speichern")
+    g.add_argument("--html", help="Mail-Text als HTML speichern")
+    g.add_argument("--smtp", action="store_true", help="Bei Signalen Mail per SMTP senden (MAIL_TO, SMTP_HOST, …)")
+    g.add_argument("--ohne-analyse", action="store_true", help="Keine Fundamentalanalyse für Kaufsignale")
+    g.set_defaults(func=cmd_signale)
+
+    st = sub.add_parser("signal-studie", help="Historische Prüfung der Signale (Ereignisstudie + Marktampel)")
+    st.add_argument("--liste", default="beobachtungsliste.csv")
+    st.add_argument("--provider", default="yahoo", choices=["yahoo", "csv", "demo"])
+    st.add_argument("--data-dir")
+    st.add_argument("--start", type=_date, default=date(2000, 1, 1))
+    st.add_argument("--end", type=_date, default=date.today())
+    st.add_argument("--output")
+    st.set_defaults(func=cmd_signal_studie)
 
     k = sub.add_parser("kennzahlen", help="Katalog aller Kennzahlen und Signale anzeigen")
     k.add_argument("--markdown", action="store_true")

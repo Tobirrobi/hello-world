@@ -289,3 +289,85 @@ def test_overlapping_holding_periods_are_not_double_counted():
                         "richtung": 1, "rendite": 0.03, "rendite_vs_index": 0.0})
     s = _summarize(rec, per, interval_days=21, horizon_days=63)
     assert s["index"]["gesamt"] == pytest.approx(1.03 ** 4 - 1, rel=1e-6)
+
+
+# ------------------------------------------------------------------ Signal-Wächter
+class _FakeSignalProvider(DataProvider):
+    def __init__(self, frames, earnings):
+        self.frames, self.earn = frames, earnings
+
+    def prices(self, t, s, e):
+        df = self.frames[t]
+        return df.loc[pd.Timestamp(s):pd.Timestamp(e)]
+
+    def earnings_history(self, t, limit=12):
+        return self.earn.get(t)
+
+
+def _frame(closes, idx):
+    c = pd.Series(closes, index=idx, dtype=float)
+    return pd.DataFrame({"open": c, "high": c * 1.01, "low": c * 0.99, "close": c, "volume": 1e6})
+
+
+def _signal_setup(after_entry):
+    from marktanalyse.signale import SignalRules
+
+    idx = pd.bdate_range("2024-01-01", periods=400)
+    react = 300  # Reaktionstag (Index)
+    stock = np.full(400, 100.0)
+    stock[react:] = 108.0  # +8 % am Meldetag
+    stock[react + 1:] = after_entry
+    flat = _frame(np.full(400, 1000.0), idx)
+    market = _frame(np.linspace(800, 1000, 400), idx)
+    ann = pd.Timestamp(idx[react - 1].date()).tz_localize("America/New_York") + pd.Timedelta(hours=16, minutes=30)
+    earn = pd.DataFrame({"estimate": [1.0], "reported": [1.2], "surprise": [20.0]}, index=[ann])
+    prov = _FakeSignalProvider({"TEST": _frame(stock, idx), "^GSPC": flat, "URTH": market}, {"TEST": earn})
+    wl = pd.DataFrame({"ticker": ["TEST"], "isin": ["XX000"], "name": ["Testfirma"], "region": ["US"], "branche": [""]})
+    return prov, wl, idx, react, SignalRules()
+
+
+def test_reaction_day_after_close_and_premarket():
+    from marktanalyse.signale import reaction_day
+
+    idx = pd.bdate_range("2026-11-02", periods=10)
+    after = pd.Timestamp("2026-11-03 16:05", tz="America/New_York")
+    pre = pd.Timestamp("2026-11-03 07:00", tz="America/New_York")
+    assert idx[reaction_day(after, idx)] == pd.Timestamp("2026-11-04")
+    assert idx[reaction_day(pre, idx)] == pd.Timestamp("2026-11-03")
+
+
+def test_buy_signal_then_sell_after_holding_period():
+    from marktanalyse.signale import scan, subject
+
+    prov, wl, idx, react, rules = _signal_setup(after_entry=110.0)
+    rep = scan(prov, wl, idx[react].date())
+    buys = [a for a in rep.alerts if a.art == "kauf"]
+    assert len(buys) == 1 and buys[0].stop == pytest.approx(108 * 0.85)
+    assert "Kauf: Testfirma" in subject(rep)
+    assert not [a for a in scan(prov, wl, idx[react + 10].date()).alerts if a.ticker == "TEST"]
+    sell = scan(prov, wl, idx[react + rules.hold_days].date()).alerts
+    assert [a.titel for a in sell if a.ticker == "TEST"] == ["VERKAUFEN: Testfirma – Haltedauer von 3 Monaten erreicht"]
+
+
+def test_emergency_stop_fires_once_and_replaces_holding_exit():
+    from marktanalyse.signale import scan
+
+    prov, wl, idx, react, rules = _signal_setup(after_entry=108.0)
+    df = prov.frames["TEST"].copy()
+    df.loc[idx[react + 5]:, ["open", "high", "low", "close"]] = 85.0  # −21 % ab Tag 5
+    prov.frames["TEST"] = df
+    hits = {d: [a.titel for a in scan(prov, wl, idx[d].date()).alerts if a.ticker == "TEST"]
+            for d in (react + 4, react + 5, react + 6, react + rules.hold_days)}
+    assert hits[react + 4] == [] and hits[react + 6] == [] and hits[react + rules.hold_days] == []
+    assert hits[react + 5] == ["VERKAUFEN: Testfirma – Notbremse ausgelöst"]
+
+
+def test_weak_reaction_gives_no_signal_and_market_light():
+    from marktanalyse.signale import scan
+
+    prov, wl, idx, react, _ = _signal_setup(after_entry=101.0)
+    df = prov.frames["TEST"].copy()
+    df.iloc[react:, :4] = 101.0  # nur +1 % Reaktion
+    prov.frames["TEST"] = df
+    rep = scan(prov, wl, idx[react].date())
+    assert rep.alerts == [] and rep.marktampel == "grün"

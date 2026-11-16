@@ -274,6 +274,14 @@ class YahooProvider(DataProvider):
             next_earnings_date=next_earn,
         )]
 
+    def earnings_history(self, ticker: str, limit: int = 12) -> pd.DataFrame:
+        """Quartalszahlen: Meldezeitpunkt (Index), Schätzung, gemeldeter Gewinn je Aktie, Überraschung in %."""
+        ed = self._t(ticker).get_earnings_dates(limit=limit)
+        if ed is None or ed.empty:
+            return pd.DataFrame(columns=["estimate", "reported", "surprise"])
+        ed = ed.rename(columns={"EPS Estimate": "estimate", "Reported EPS": "reported", "Surprise(%)": "surprise"})
+        return ed[["estimate", "reported", "surprise"]].dropna(subset=["reported"]).sort_index()
+
     def news(self, ticker, start, end):
         try:
             raw = self._t(ticker).get_news(count=50)
