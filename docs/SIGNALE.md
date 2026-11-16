@@ -104,7 +104,7 @@ und L'Oréal z. B. nicht, daher sind sie nicht in der Liste).
 * **Zeitpunkt:** werktags 6:47 Uhr (Europe/Berlin). Ausgewertet wird der letzte abgeschlossene Handelstag, eine Kauforder
   ist also vor bzw. bei Handelsbeginn möglich.
 * **Variante A (eingerichtet):** eine geplante Claude-Aufgabe weckt werktags um 6:47 Uhr die Claude-Sitzung, in der das
-  Tool entstanden ist. Die Sitzung führt \`marktanalyse signale\` aus und mailt bei Signalen über das verbundene
+  Tool entstanden ist. Die Sitzung führt `marktanalyse signale` aus und mailt bei Signalen über das verbundene
   Gmail-Konto. Verwalten oder abschalten lässt sich das in claude.ai unter den geplanten Aufgaben.
 * **Variante B:** GitHub Actions (`.github/workflows/marktanalyse.yml`) mit SMTP. Dafür im Repository unter
   Settings → Secrets die Werte `MAIL_TO`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` und `SMTP_PASSWORD` hinterlegen,
