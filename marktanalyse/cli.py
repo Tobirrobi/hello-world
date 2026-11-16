@@ -252,7 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--smtp", action="store_true", help="Bei Signalen Mail per SMTP senden (MAIL_TO, SMTP_HOST, …)")
     g.set_defaults(func=cmd_signale)
 
-    st = sub.add_parser("signal-studie", help="Historische Prüfung der Signale (Ereignisstudie + Marktampel)")
+    st = sub.add_parser("signal-studie", help="Historische Prüfung der Signale (Ereignisstudie + Depot-Simulation)")
     st.add_argument("--liste", default="beobachtungsliste.csv")
     st.add_argument("--provider", default="yahoo", choices=["yahoo", "csv", "demo"])
     st.add_argument("--data-dir")
