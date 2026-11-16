@@ -1,0 +1,5 @@
+# Watchlist für die regelmäßige Analyse (Yahoo-Ticker, eine Zeile oder kommagetrennt)
+# USA
+AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, JPM, XOM, JNJ
+# Deutschland
+SAP.DE, SIE.DE, ALV.DE, DTE.DE, BAS.DE, BMW.DE

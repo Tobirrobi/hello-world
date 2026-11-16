@@ -1,0 +1,24 @@
+ticker,isin,name,region,branche
+SAP.DE,DE0007164600,SAP,DE,Software
+SIE.DE,DE0007236101,Siemens,DE,Industrie
+ALV.DE,DE0008404005,Allianz,DE,Versicherung
+MUV2.DE,DE0008430026,Münchener Rück,DE,Versicherung
+DTE.DE,DE0005557508,Deutsche Telekom,DE,Telekommunikation
+RHM.DE,DE0007030009,Rheinmetall,DE,Rüstung
+IFX.DE,DE0006231004,Infineon,DE,Halbleiter
+DB1.DE,DE0005810055,Deutsche Börse,DE,Finanzinfrastruktur
+MBG.DE,DE0007100000,Mercedes-Benz Group,DE,Auto
+ASML.AS,NL0010273215,ASML,EU,Halbleiter
+AIR.PA,NL0000235190,Airbus,EU,Luftfahrt
+NOVO-B.CO,DK0062498333,Novo Nordisk,EU,Pharma
+AAPL,US0378331005,Apple,US,Technologie
+MSFT,US5949181045,Microsoft,US,Software
+NVDA,US67066G1040,NVIDIA,US,Halbleiter
+AMZN,US0231351067,Amazon,US,Handel/Cloud
+GOOGL,US02079K3059,Alphabet (A),US,Internet
+META,US30303M1027,Meta Platforms,US,Internet
+JPM,US46625H1005,JPMorgan Chase,US,Bank
+V,US92826C8394,Visa,US,Zahlungsverkehr
+LLY,US5324571083,Eli Lilly,US,Pharma
+COST,US22160K1052,Costco,US,Einzelhandel
+XOM,US30231G1022,ExxonMobil,US,Energie

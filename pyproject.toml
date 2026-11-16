@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marktanalyse"
+version = "0.1.0"
+description = "Regelbasierte Aktienmarktanalyse mit Long-/Short-Empfehlungen für steigende und fallende Märkte"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.2",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+yahoo = ["yfinance>=0.2.50"]
+llm = ["anthropic>=2.8"]
+dev = ["pytest>=7"]
+all = ["yfinance>=0.2.50", "anthropic>=2.8", "pytest>=7"]
+
+[project.scripts]
+marktanalyse = "marktanalyse.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["marktanalyse*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

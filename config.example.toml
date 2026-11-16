@@ -1,0 +1,38 @@
+# Beispielkonfiguration – Nutzung: marktanalyse analyze ... --config config.example.toml
+# Alle Werte sind optional; nicht gesetzte Werte nutzen die Standards aus marktanalyse/config.py.
+
+capital = 50000            # Depotgröße für Positionsgrößen
+risk_per_trade = 0.01      # 1 % des Kapitals je Trade riskieren
+max_position_pct = 0.10    # max. 10 % des Kapitals je Position
+atr_stop_multiple = 2.5    # Stop-Loss-Abstand in ATR
+reward_risk = 2.0          # Kursziel = 2 × Stop-Abstand
+
+news_lookback_days = 14
+news_half_life_days = 3.0
+
+squeeze_short_interest = 0.20      # ab 20 % Leerverkaufsquote Short abschwächen
+min_dollar_volume_short = 1000000  # Mindest-Tagesumsatz für Shorts
+
+# Einzelne Signale abschalten oder umgewichten (Schlüssel siehe: marktanalyse kennzahlen)
+disabled_signals = []
+[signal_weights]
+kgv = 1.5
+momentum_12_1 = 1.3
+
+# Schwellen je Marktphase (Gesamtscore -1..+1)
+[thresholds.bull]
+long = 0.15
+strong_long = 0.40
+short = 0.30
+strong_short = 0.50
+
+[thresholds.bear]
+long = 0.30
+strong_long = 0.50
+short = 0.15
+strong_short = 0.40
+
+# Kategorie-Gewichte je Marktphase (müssen nicht 1 ergeben, werden normiert)
+[category_weights.sideways]
+bewertung = 0.18
+oszillator = 0.14

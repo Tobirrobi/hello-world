@@ -1,0 +1,70 @@
+name: Marktanalyse (regelmäßig)
+
+on:
+  schedule:
+    # Mo–Fr 22:30 UTC, nach US-Börsenschluss
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: "Stichtag JJJJ-MM-TT (leer = heute)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ".[yahoo]"
+
+      # Reports und Datenarchiv zwischen den Läufen behalten (für Änderungsvergleich & Point-in-Time-Historie)
+      - uses: actions/cache@v4
+        with:
+          path: |
+            reports
+            daten
+          key: marktanalyse-${{ github.run_id }}
+          restore-keys: marktanalyse-
+
+      - name: Daten archivieren
+        run: marktanalyse archive --watchlist watchlist.txt --target daten || echo "Archivierung teilweise fehlgeschlagen"
+
+      - name: Analyse
+        env:
+          AS_OF: ${{ github.event.inputs.as_of }}
+        run: |
+          ARGS=()
+          if [ -n "$AS_OF" ]; then
+            [[ "$AS_OF" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "Ungültiger Stichtag: $AS_OF"; exit 1; }
+            ARGS=(--as-of "$AS_OF")
+          fi
+          marktanalyse analyze --watchlist watchlist.txt --output reports "${ARGS[@]}"
+
+      - name: Signal-Wächter (Mail nur wenn SMTP-Secrets gesetzt sind und Signale vorliegen)
+        env:
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          # Lauf nach US-Börsenschluss: der heutige Handelstag ist abgeschlossen
+          marktanalyse signale --as-of "$(date -u +%F)" --seit 2026-11-16 --json reports/signale.json --smtp
+
+      - name: Report in Zusammenfassung
+        run: cat reports/latest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marktanalyse-${{ github.run_number }}
+          path: |
+            reports/latest.md
+            reports/latest.json
+            reports/signale.json
+          retention-days: 30
