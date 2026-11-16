@@ -20,6 +20,13 @@ def _growth(cur: Optional[float], prev: Optional[float]) -> Optional[float]:
     return (cur - prev) / abs(prev)
 
 
+def _annualize(g: Optional[float], gap_days: int) -> Optional[float]:
+    """Rechnet Wachstum über einen vom Jahr abweichenden Abstand auf 12 Monate um."""
+    if g is None or gap_days <= 0 or abs(gap_days - 365) <= 45 or 1 + g <= 0:
+        return g
+    return (1 + g) ** (365 / gap_days) - 1
+
+
 @dataclass
 class FundamentalMetrics:
     market_cap: Optional[float] = None
@@ -172,15 +179,31 @@ def compute_fundamentals(
         m.interest_coverage = _div(cur.operating_income_ttm, abs(cur.interest_expense_ttm))
 
     if prev is not None:
-        m.revenue_growth = _growth(cur.revenue_ttm, prev.revenue_ttm)
+        gap = (cur.period_end - prev.period_end).days if cur.period_end and prev.period_end else 365
+        m.revenue_growth = _annualize(_growth(cur.revenue_ttm, prev.revenue_ttm), gap)
         prev_eps = prev.eps_ttm if prev.eps_ttm is not None else _div(prev.net_income_ttm, prev.shares_outstanding)
-        m.eps_growth = _growth(eps, prev_eps)
+        g = _growth(eps, prev_eps)
+        m.eps_growth = _annualize(g, gap) if eps and prev_eps and eps > 0 and prev_eps > 0 else g
         prev_om = _div(prev.operating_income_ttm, prev.revenue_ttm)
         if m.operating_margin is not None and prev_om is not None:
             m.operating_margin_change = m.operating_margin - prev_om
         m.piotroski = piotroski_f_score(cur, prev)
 
-    if m.pe is not None and m.eps_growth is not None and m.eps_growth > 0:
-        m.peg = m.pe / (m.eps_growth * 100)
+    # Umsatz: exakter Vergleich mit dem Vorjahresquartal hat Vorrang.
+    # Gewinn: 12-Monats-Vergleich hat Vorrang, weil Einzelquartale durch Einmaleffekte stark schwanken.
+    if cur.revenue_growth_yoy is not None:
+        m.revenue_growth = cur.revenue_growth_yoy
+    if m.eps_growth is None and cur.eps_growth_yoy is not None:
+        m.eps_growth = cur.eps_growth_yoy
+
+    # PEG: bevorzugt erwartetes Gewinnwachstum (Forward-EPS), sonst historisches; gedeckelt bei 50 %,
+    # nur sinnvoll ab 5 % Wachstum
+    growth = None
+    if expectations is not None and expectations.eps_forward and eps and eps > 0 and expectations.eps_forward > 0:
+        growth = expectations.eps_forward / eps - 1
+    elif m.eps_growth is not None:
+        growth = m.eps_growth
+    if m.pe is not None and growth is not None and growth >= 0.05:
+        m.peg = m.pe / (min(growth, 0.5) * 100)
     m.altman_z = altman_z_score(cur, mc)
     return m

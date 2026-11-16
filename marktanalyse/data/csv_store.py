@@ -67,7 +67,8 @@ class CsvProvider(DataProvider):
             row = df[df["ticker"] == ticker]
             if not row.empty:
                 r = row.iloc[0]
-                return TickerInfo(ticker, str(r.get("name", "")), str(r.get("sector", "")), str(r.get("currency", "")))
+                return TickerInfo(ticker, str(r.get("name", "")), str(r.get("sector", "")), str(r.get("currency", "")),
+                                  str(r.get("industry", "")))
         return TickerInfo(ticker)
 
     def fundamentals(self, ticker):

@@ -68,6 +68,17 @@ def band(score: float, pos: str, neg: str, neutral: str = "neutral") -> str:
     return neutral
 
 
+FINANCIAL_KEYWORDS = ("bank", "insurance", "reinsurance", "capital markets", "mortgage", "versicher", "banken")
+# Kennzahlen, die für Banken/Versicherer nicht aussagekräftig sind (Bilanzstruktur, Cashflow-Definition)
+FINANCIAL_SKIP = {"fcf_rendite", "ev_ebitda", "kuv", "verschuldung", "nettoverschuldung", "liquiditaet",
+                  "zinsdeckung", "altman_z", "marge", "marge_trend"}
+
+
+def is_financial(info: TickerInfo) -> bool:
+    text = f"{info.industry} {'' if info.industry else info.sector}".lower()
+    return any(k in text for k in FINANCIAL_KEYWORDS) or (not info.industry and "financ" in text)
+
+
 # --------------------------------------------------------------------------- Kontext
 @dataclass
 class SignalContext:
@@ -307,9 +318,6 @@ def _altman(c: SignalContext) -> RuleResult:
     z = c.fund.altman_z
     if z is None:
         return None
-    sector = (c.info.sector or "").lower()
-    if any(k in sector for k in ("financial", "bank", "insur", "finanz", "versicher")):
-        return None  # für Finanzwerte nicht aussagekräftig
     s = interp(z, [(1.0, -0.9), (1.81, -0.5), (2.99, 0.2), (5.0, 0.4)])
     zone = "Gefahrenzone" if z < 1.81 else ("Grauzone" if z < 2.99 else "sichere Zone")
     return s, z, num(z, 2), f"Altman Z {z:.2f} – {zone}"
@@ -634,8 +642,9 @@ def _size(c: SignalContext) -> RuleResult:
 # --------------------------------------------------------------------------- Auswertung
 def evaluate_rules(ctx: SignalContext) -> list[Signal]:
     out: list[Signal] = []
+    financial = is_financial(ctx.info)
     for spec in RULES:
-        if spec.key in ctx.config.disabled_signals:
+        if spec.key in ctx.config.disabled_signals or (financial and spec.key in FINANCIAL_SKIP):
             continue
         res = spec.fn(ctx)
         if res is None:

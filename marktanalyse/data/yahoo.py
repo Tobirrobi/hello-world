@@ -14,6 +14,7 @@ Point-in-Time-Hinweise:
 from __future__ import annotations
 
 import logging
+from dataclasses import fields
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -60,11 +61,19 @@ def _get(df: Optional[pd.DataFrame], key: str, col) -> Optional[float]:
 
 
 def _ttm(df: Optional[pd.DataFrame], key: str, cols: list) -> Optional[float]:
-    """Summe der letzten 4 Quartale (alle müssen vorhanden sein)."""
-    vals = [_get(df, key, c) for c in cols]
-    if len(vals) < 4 or any(v is None for v in vals):
+    """Summe der letzten 4 Quartale; fehlt genau eines, wird aus den übrigen drei hochgerechnet."""
+    vals = [v for v in (_get(df, key, c) for c in cols) if v is not None]
+    if len(cols) < 4 or len(vals) < 3:
         return None
-    return float(sum(vals))
+    return float(sum(vals) * 4 / len(vals))
+
+
+def _qgrowth(df: Optional[pd.DataFrame], key: str, col, prev_col, need_positive: bool = False) -> Optional[float]:
+    """Wachstum eines Quartals ggü. dem Vorjahresquartal."""
+    cur, prev = _get(df, key, col), _get(df, key, prev_col)
+    if cur is None or prev is None or prev == 0 or (need_positive and prev < 0):
+        return None
+    return (cur - prev) / abs(prev)
 
 
 class YahooProvider(DataProvider):
@@ -89,65 +98,97 @@ class YahooProvider(DataProvider):
         df = self._t(ticker).history(start=start, end=end + timedelta(days=1), auto_adjust=True, actions=False)
         return normalize_prices(df)
 
-    def info(self, ticker):
+    def _info_dict(self, ticker: str) -> dict:
         try:
-            i = self._t(ticker).info or {}
+            return self._t(ticker).info or {}
         except Exception as exc:
             log.warning("Info für %s nicht abrufbar: %s", ticker, exc)
-            i = {}
+            return {}
+
+    def info(self, ticker):
+        i = self._info_dict(ticker)
         return TickerInfo(
             ticker=ticker,
             name=i.get("longName") or i.get("shortName") or ticker,
             sector=i.get("sector") or "",
             currency=i.get("currency") or "",
+            industry=i.get("industry") or "",
         )
 
     def fundamentals(self, ticker):
         t = self._t(ticker)
-        snaps: list[FundamentalSnapshot] = []
         try:
             qi, qb, qc = t.quarterly_income_stmt, t.quarterly_balance_sheet, t.quarterly_cashflow
             ai, ab, ac = t.income_stmt, t.balance_sheet, t.cashflow
         except Exception as exc:
             log.warning("Fundamentaldaten für %s nicht abrufbar: %s", ticker, exc)
             return []
+        try:
+            ti, tc = t.ttm_income_stmt, t.ttm_cashflow
+        except Exception:
+            ti = tc = None
+        try:
+            divs = t.dividends
+            divs.index = pd.to_datetime(divs.index).tz_localize(None) if divs.index.tz is not None else divs.index
+        except Exception:
+            divs = None
 
+        snaps: list[FundamentalSnapshot] = []
         # Jahresabschlüsse (längere Historie)
         if ab is not None and not ab.empty:
             for col in sorted(ab.columns):
-                snaps.append(self._snapshot(col, ai, ab, ac, None, self.annual_lag_days))
-        # Quartale mit TTM aus 4 Quartalen (präziser, aber kürzere Historie)
-        if qb is not None and not qb.empty and qi is not None and not qi.empty:
+                snaps.append(self._snapshot(col, col, ai, ab, ac, None, self.annual_lag_days, divs))
+        # Quartale: TTM aus den letzten 4 Quartalen (eine Lücke wird hochgerechnet)
+        if qi is not None and not qi.empty and qb is not None and not qb.empty:
             qcols = sorted(qi.columns)
+            bcols = sorted(qb.columns)
             for i in range(3, len(qcols)):
-                window = qcols[i - 3:i + 1]
-                col = window[-1]
-                if col not in qb.columns:
+                col = qcols[i]
+                bal = [b for b in bcols if b <= col and (col - b).days <= 100]
+                if not bal:
                     continue
-                snaps.append(self._snapshot(col, qi, qb, qc, window, self.report_lag_days))
-        snaps = [s for s in snaps if s is not None]
+                snap = self._snapshot(col, bal[-1], qi, qb, qc, qcols[i - 3:i + 1], self.report_lag_days, divs,
+                                      ttm=(ti, tc))
+                yoy = [c for c in qcols[:i] if 330 <= (col - c).days <= 400]
+                if yoy and snap is not None:
+                    snap.revenue_growth_yoy = _qgrowth(qi, "revenue", col, yoy[-1])
+                    snap.eps_growth_yoy = _qgrowth(qi, "eps", col, yoy[-1], need_positive=True)
+                snaps.append(snap)
+        snaps = [s for s in snaps if s is not None and (s.revenue_ttm is not None or s.net_income_ttm is not None)]
+        snaps = self._to_price_currency(ticker, snaps)
         # bei gleichem Verfügbarkeitsdatum den Quartals-Snapshot bevorzugen
         dedup = {}
         for s in sorted(snaps, key=lambda s: s.available_date):
             dedup[s.available_date] = s
         return list(dedup.values())
 
-    def _snapshot(self, col, inc, bal, cf, ttm_cols, lag) -> Optional[FundamentalSnapshot]:
+    def _snapshot(self, col, bal_col, inc, bal, cf, ttm_cols, lag, divs, ttm=(None, None)) -> Optional[FundamentalSnapshot]:
         period_end = pd.Timestamp(col).date()
+        cf_keys = ("cfo", "capex", "fcf", "dividends")
 
         def flow(key):
+            src = cf if key in cf_keys else inc
             if ttm_cols is None:
-                return _get(inc if key not in ("cfo", "capex", "fcf", "dividends") else cf, key, col)
-            src = inc if key not in ("cfo", "capex", "fcf", "dividends") else cf
-            return _ttm(src, key, ttm_cols)
+                return _get(src, key, col)
+            v = _ttm(src, key, ttm_cols)
+            if v is None:  # direkt von Yahoo gelieferte TTM-Werte (nur jüngstes Quartal)
+                tsrc = ttm[1] if key in cf_keys else ttm[0]
+                if tsrc is not None and not tsrc.empty and col in tsrc.columns:
+                    v = _get(tsrc, key, col)
+            return v
 
-        shares = _get(bal, "shares", col)
+        shares = _get(bal, "shares", bal_col)
         ni = flow("net_income")
         eps = flow("eps")
         if eps is None and ni is not None and shares:
             eps = ni / shares
-        divs = flow("dividends")
         capex = flow("capex")
+        dps = None
+        if divs is not None:
+            pe_ts = pd.Timestamp(period_end)
+            dps = float(divs[(divs.index > pe_ts - pd.Timedelta(days=365)) & (divs.index <= pe_ts)].sum())
+        elif flow("dividends") is not None and shares:
+            dps = abs(flow("dividends")) / shares
         return FundamentalSnapshot(
             available_date=period_end + timedelta(days=lag),
             period_end=period_end,
@@ -162,23 +203,45 @@ class YahooProvider(DataProvider):
             operating_cash_flow_ttm=flow("cfo"),
             capex_ttm=abs(capex) if capex is not None else None,
             free_cash_flow_ttm=flow("fcf"),
-            dividends_per_share_ttm=(abs(divs) / shares) if divs is not None and shares else None,
-            total_assets=_get(bal, "total_assets", col),
-            total_liabilities=_get(bal, "total_liabilities", col),
-            total_equity=_get(bal, "equity", col),
-            total_debt=_get(bal, "total_debt", col),
-            cash=_get(bal, "cash", col),
-            current_assets=_get(bal, "current_assets", col),
-            current_liabilities=_get(bal, "current_liabilities", col),
-            retained_earnings=_get(bal, "retained_earnings", col),
+            dividends_per_share_ttm=dps,
+            total_assets=_get(bal, "total_assets", bal_col),
+            total_liabilities=_get(bal, "total_liabilities", bal_col),
+            total_equity=_get(bal, "equity", bal_col),
+            total_debt=_get(bal, "total_debt", bal_col),
+            cash=_get(bal, "cash", bal_col),
+            current_assets=_get(bal, "current_assets", bal_col),
+            current_liabilities=_get(bal, "current_liabilities", bal_col),
+            retained_earnings=_get(bal, "retained_earnings", bal_col),
         )
+
+    def _to_price_currency(self, ticker: str, snaps: list[FundamentalSnapshot]) -> list[FundamentalSnapshot]:
+        """Rechnet Bilanzwerte in die Kurswährung um (z. B. ADRs mit Abschluss in TWD, Kurs in USD)."""
+        i = self._info_dict(ticker)
+        fin, px = i.get("financialCurrency"), i.get("currency")
+        if not snaps or not fin or not px or fin == px:
+            return snaps
+        try:
+            start = min(s.period_end for s in snaps) - timedelta(days=10)
+            fx = self.prices(f"{fin}{px}=X", start, date.today())["close"]
+        except Exception as exc:
+            log.warning("%s: Wechselkurs %s/%s nicht verfügbar (%s) – Fundamentaldaten verworfen", ticker, fin, px, exc)
+            return []
+        if fx.empty:
+            return []
+        money = [f.name for f in fields(FundamentalSnapshot)
+                 if f.name not in ("available_date", "period_end", "shares_outstanding", "revenue_growth_yoy", "eps_growth_yoy")]
+        for s in snaps:
+            # Dividenden kommen bereits in Kurswährung aus der Ausschüttungshistorie
+            rate = float(fx.loc[: pd.Timestamp(s.period_end)].iloc[-1]) if not fx.loc[: pd.Timestamp(s.period_end)].empty else float(fx.iloc[0])
+            for name in money:
+                v = getattr(s, name)
+                if v is not None and name != "dividends_per_share_ttm":
+                    setattr(s, name, v * rate)
+        return snaps
 
     def market_sentiment(self, ticker):
         t = self._t(ticker)
-        try:
-            i = t.info or {}
-        except Exception:
-            i = {}
+        i = self._info_dict(ticker)
         next_earn = None
         try:
             cal = t.calendar

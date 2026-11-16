@@ -277,3 +277,15 @@ def test_scheduler_timing():
     assert nxt.weekday() == 0 and (nxt.hour, nxt.minute) == (22, 15)
     mon = datetime(2026, 11, 16, 9, 0)
     assert next_run(mon, timedelta(hours=6)) == datetime(2026, 11, 16, 15, 0)
+
+
+def test_overlapping_holding_periods_are_not_double_counted():
+    from marktanalyse.backtest import _summarize
+
+    # 12 Stichtage, Haltedauer = 3 × Abstand, jede Periode +3 % → pro Abstand ~+1 %
+    per = pd.DataFrame({"datum": range(12), "regime": "bull", "index": 0.03, "long": 0.03, "short": np.nan,
+                        "long_short": 0.03, "n_long": 1, "n_short": 0, "ic": np.nan})
+    rec = pd.DataFrame({"datum": range(12), "ticker": "X", "regime": "bull", "score": 0.3, "empfehlung": "long",
+                        "richtung": 1, "rendite": 0.03, "rendite_vs_index": 0.0})
+    s = _summarize(rec, per, interval_days=21, horizon_days=63)
+    assert s["index"]["gesamt"] == pytest.approx(1.03 ** 4 - 1, rel=1e-6)

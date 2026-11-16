@@ -73,6 +73,7 @@ def run_backtest(
                 "datum": d, "ticker": a.ticker, "regime": rep.regime.regime.value, "score": a.total_score,
                 "empfehlung": a.recommendation.value, "richtung": a.recommendation.direction,
                 "rendite": r, "rendite_vs_index": r - bret,
+                **{f"kat_{c}": v for c, v in a.category_scores.items()},
             })
             if a.recommendation.direction > 0:
                 longs.append(r)
@@ -91,10 +92,10 @@ def run_backtest(
 
     records = pd.DataFrame(rows)
     periods = pd.DataFrame(prow)
-    return BacktestResult(records, periods, _summarize(records, periods, interval_days))
+    return BacktestResult(records, periods, _summarize(records, periods, interval_days, horizon_days))
 
 
-def _summarize(rec: pd.DataFrame, per: pd.DataFrame, interval_days: int) -> dict:
+def _summarize(rec: pd.DataFrame, per: pd.DataFrame, interval_days: int, horizon_days: int = 0) -> dict:
     if rec.empty or per.empty:
         return {}
     out: dict = {"stichtage": len(per), "beobachtungen": len(rec)}
@@ -114,8 +115,14 @@ def _summarize(rec: pd.DataFrame, per: pd.DataFrame, interval_days: int) -> dict
     out["nach_empfehlung"] = by
     per_year = 252 / interval_days
 
+    # Überlappen sich die Haltezeiträume (Haltedauer > Abstand), wird jede Periodenrendite auf den
+    # Abstand zwischen zwei Stichtagen umgerechnet – sonst würde dieselbe Rendite mehrfach verkettet.
+    scale = interval_days / horizon_days if horizon_days > interval_days else 1.0
+
     def stats(series: pd.Series) -> dict:
         s = series.fillna(0.0)
+        if scale != 1.0:
+            s = (1 + s).clip(lower=1e-9) ** scale - 1
         curve = (1 + s).cumprod()
         total = float(curve.iloc[-1] - 1)
         ann = float(curve.iloc[-1] ** (per_year / len(s)) - 1) if len(s) else 0.0
@@ -123,10 +130,23 @@ def _summarize(rec: pd.DataFrame, per: pd.DataFrame, interval_days: int) -> dict
         dd = float((curve / curve.cummax() - 1).min())
         return {"gesamt": total, "p_a": ann, "vola": vol, "sharpe": ann / vol if vol else None, "max_dd": dd}
 
+    out["skaliert"] = scale != 1.0
     out["long_short_strategie"] = stats(per["long_short"])
     out["nur_long"] = stats(per["long"])
     out["index"] = stats(per["index"])
     out["ø_information_coefficient"] = float(per["ic"].mean()) if per["ic"].notna().any() else None
+    # Information Coefficient je Kategorie: welche Kennzahlgruppe sagt die Folgerendite voraus?
+    cat_ic = {}
+    for col in [c for c in rec.columns if c.startswith("kat_")]:
+        ics = []
+        for _, g in rec.groupby("datum"):
+            g = g[[col, "rendite"]].dropna()
+            if len(g) >= 4 and g[col].nunique() > 1:
+                ics.append(g[col].rank().corr(g["rendite"].rank()))
+        if ics:
+            cat_ic[col[4:]] = {"ic": float(np.nanmean(ics)), "anteil_positiv": float(np.mean(np.array(ics) > 0)),
+                               "stichtage": len(ics)}
+    out["ic_je_kategorie"] = cat_ic
     out["nach_marktphase"] = {
         reg: {"stichtage": int(len(g)), "ø_long_short": float(g["long_short"].mean()), "ø_index": float(g["index"].mean())}
         for reg, g in per.groupby("regime")
@@ -147,7 +167,10 @@ def backtest_markdown(res: BacktestResult, title: str = "Backtest") -> str:
     for k, v in s["nach_empfehlung"].items():
         hit = "–" if v["trefferquote"] is None else f"{v['trefferquote']:.0%}"
         L.append(f"| {k} | {v['anzahl']} | {f(v['ø_rendite'])} | {f(v['ø_vs_index'])} | {hit} |")
-    L += ["", "## Strategien", "", "| Strategie | Gesamt | p. a. | Volatilität | Sharpe | Max. Drawdown |",
+    L += ["", "## Strategien", "",
+          "Rendite der Strategie, wenn zu jedem Stichtag gemäß Empfehlung umgeschichtet wird"
+          + (" (überlappende Haltezeiträume auf den Stichtagsabstand umgerechnet)" if s.get("skaliert") else "") + ".",
+          "", "| Strategie | Gesamt | p. a. | Volatilität | Sharpe | Max. Drawdown |",
           "|---|---:|---:|---:|---:|---:|"]
     for name, key in (("Long/Short nach Empfehlung", "long_short_strategie"), ("Nur Long-Empfehlungen", "nur_long"),
                       ("Index (Buy & Hold)", "index")):
@@ -158,8 +181,22 @@ def backtest_markdown(res: BacktestResult, title: str = "Backtest") -> str:
     L += ["", f"Ø Information Coefficient (Rangkorrelation Score ↔ Folgerendite): "
               f"{'–' if ic is None else f'{ic:+.3f}'}", "", "## Nach Marktphase", "",
           "| Marktphase | Stichtage | Ø Long/Short je Periode | Ø Index je Periode |", "|---|---:|---:|---:|"]
+    cat_rows = []
+    if s.get("ic_je_kategorie"):
+        from .config import CATEGORIES
+
+        cat_rows = ["", "## Vorhersagekraft je Kategorie", "",
+                    "Information Coefficient (Ø Rangkorrelation Kategorie-Score ↔ Folgerendite, ab 10 Stichtagen). "
+                    "> +0,05 gilt als nützlich, um 0 als wirkungslos, negativ als gegenläufig.", "",
+                    "| Kategorie | Ø IC | Anteil Stichtage mit IC > 0 |", "|---|---:|---:|"]
+        for k, v in sorted(s["ic_je_kategorie"].items(), key=lambda kv: -kv[1]["ic"]):
+            if v["stichtage"] < 10:
+                cat_rows.append(f"| {CATEGORIES.get(k, k)} | zu wenig Daten | {v['stichtage']} Stichtag(e) |")
+            else:
+                cat_rows.append(f"| {CATEGORIES.get(k, k)} | {v['ic']:+.3f} | {v['anteil_positiv']:.0%} |")
     for reg, v in s["nach_marktphase"].items():
         L.append(f"| {reg} | {v['stichtage']} | {f(v['ø_long_short'])} | {f(v['ø_index'])} |")
+    L += cat_rows
     L += ["", "> Ein Backtest ist kein Beweis für zukünftige Ergebnisse. Transaktionskosten, Leihgebühren "
               "und Slippage sind nicht berücksichtigt."]
     return "\n".join(L) + "\n"

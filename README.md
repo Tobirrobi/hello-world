@@ -33,6 +33,21 @@ Stichtag ──► Daten bis zum Stichtag ──► Marktphase (Bulle/Bär/Seitw
 Alle Kennzahlen, Signale, Schwellen und die Logik für Long und Short stehen in
 **[docs/KENNZAHLEN.md](docs/KENNZAHLEN.md)**.
 
+## Ergebnis auf echten Daten – bitte lesen
+
+Ein Backtest mit echten Yahoo-Daten (16 Watchlist-Werte, monatlich 06/2023–10/2026) steht in
+**[docs/BACKTEST_ECHTDATEN.md](docs/BACKTEST_ECHTDATEN.md)**. Kurz:
+
+* Der **Gesamtscore hat in diesem Test keine nachweisbare Prognosekraft** (Information Coefficient ≈ 0).
+  Der Vorsprung der Long-Empfehlungen gegenüber dem Index stammt aus der Watchlist-Auswahl, nicht aus den Signalen.
+* **Wachstum** und **Qualität & Bilanz** sagten die Folgerenditen konsistent voraus,
+  **Bewertung** und **Trend** liefen im Wachstums-Bullenmarkt 2023–2026 gegenläufig.
+* Der Zeitraum enthält fast nur Bullenmarkt – die Bärenmarkt- und Short-Logik ist damit nicht validiert.
+
+Die Empfehlungen sind daher als strukturierte Zusammenfassung der Kennzahlen zu verstehen, nicht als belegte
+Handelsstrategie. Vor echtem Einsatz: Backtest auf eigenem, größerem Universum laufen lassen
+(`marktanalyse backtest ...`) und Gewichte per `--config` anpassen.
+
 ## Installation
 
 ```bash
@@ -42,6 +57,10 @@ pip install -e ".[all]"          # alles inkl. Tests
 ```
 
 Python ≥ 3.10.
+
+In Cloud-Umgebungen mit eingeschränktem Netz müssen diese Hosts erlaubt sein: `query1.finance.yahoo.com`,
+`query2.finance.yahoo.com`, `finance.yahoo.com`, `fc.yahoo.com`, `guce.yahoo.com`, `consent.yahoo.com`
+und für Nachrichten `nexus-finance-prod.media.yahoo.com`.
 
 ## Schnellstart
 

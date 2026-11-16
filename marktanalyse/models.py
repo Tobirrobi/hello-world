@@ -20,6 +20,7 @@ class TickerInfo:
     name: str = ""
     sector: str = ""
     currency: str = ""
+    industry: str = ""
 
 
 @dataclass
@@ -48,6 +49,9 @@ class FundamentalSnapshot:
     current_assets: Optional[float] = None
     current_liabilities: Optional[float] = None
     retained_earnings: Optional[float] = None
+    # Wachstum ggü. Vorjahresquartal, falls die Datenquelle es direkt liefert
+    revenue_growth_yoy: Optional[float] = None
+    eps_growth_yoy: Optional[float] = None
 
 
 @dataclass

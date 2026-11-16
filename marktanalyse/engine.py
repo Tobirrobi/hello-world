@@ -40,13 +40,13 @@ def _latest_before(items, as_of: date, max_age_days: Optional[int] = None):
 
 
 def _year_ago(items: list[FundamentalSnapshot], cur: FundamentalSnapshot) -> Optional[FundamentalSnapshot]:
-    """Vergleichsperiode ~12 Monate vor dem aktuellen Snapshot."""
+    """Vergleichsperiode ~12 Monate vor dem aktuellen Snapshot (±100 Tage, Wachstum wird ggf. annualisiert)."""
     ref = cur.period_end or cur.available_date
     best, best_gap = None, None
     for x in items:
         p = x.period_end or x.available_date
         gap = abs((ref - p).days - 365)
-        if x is not cur and x.available_date <= cur.available_date and gap <= 60:
+        if x is not cur and x.available_date <= cur.available_date and gap <= 100 and (ref - p).days > 200:
             if best_gap is None or gap < best_gap:
                 best, best_gap = x, gap
     return best
