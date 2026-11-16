@@ -1,25 +1,20 @@
-"""Signal-Wächter: einfache Kauf-/Verkaufsmails für Einsteiger.
+"""Signal-Wächter: Kaufmails für gezieltes Einkaufen (Einsteiger-Regel).
 
-Die Regel für den Nutzer ist absichtlich ganz einfach:
-
-* **Kaufmail** → Aktie für den festen Betrag kaufen und halten.
-* **Verkaufsmail** → Aktie komplett verkaufen.
+Standard (nur Kaufmails)
+    **Kaufmail → für den festen Betrag kaufen und langfristig behalten.**
+    Es gibt keine Verkaufsmails.
 
 Wann eine Kaufmail kommt
     Die Firma hat Quartalszahlen gemeldet, der Gewinn je Aktie lag ≥ 5 % über
     der Analystenschätzung **und** die Aktie stieg am Meldetag ≥ 3 % stärker als
-    der Markt. Historisch lief die Aktie danach im Schnitt rund 3 Monate weiter
-    besser als der Markt (Post-Earnings-Drift, siehe docs/SIGNALE.md).
+    der Markt (Post-Earnings-Drift, siehe docs/SIGNALE.md). Höchstens eine
+    Kaufmail pro Aktie innerhalb von 12 Monaten, damit sich das Depot nicht auf
+    wenige Titel konzentriert.
 
-Wann eine Verkaufsmail kommt
-    * 63 Handelstage (≈ 3 Monate) nach dem Kaufsignal, oder
-    * wenn der Schlusskurs mehr als 15 % unter dem Kaufkurs liegt (Notbremse).
-
-Kommt für eine Aktie, die man (laut den Mails) schon besitzt, ein neues
-Kaufsignal, gibt es keine Mail: Man hält einfach weiter, die 3 Monate beginnen
-neu. Klassische Chartsignale, die Marktampel und Short-Signale werden nicht
-gemeldet: Sie brachten in den Tests keinen Vorteil (Kaufsignale liefen auch bei
-schwachem Gesamtmarkt nicht schlechter).
+Optional (``verkauf=True`` bzw. ``--mit-verkauf``)
+    Zusätzlich Verkaufsmails nach 63 Handelstagen oder bei −15 % unter Kaufkurs.
+    In diesem Modus gibt es keine 12-Monats-Grenze; ein neues Kaufsignal während
+    des Haltens verlängert die Haltedauer ohne Mail.
 """
 
 from __future__ import annotations
@@ -53,7 +48,8 @@ class SignalRules:
     bench_us: str = "^GSPC"
     bench_other: str = "^GDAXI"
     cost_per_side: float = 0.001  # Spread/Gebühr in der Studie
-    slots: int = 6  # Budget-Aufteilung für die Studie (= Faustregel "Budget ÷ 6")
+    slots: int = 6  # Budget-Aufteilung für die Studie mit Verkauf (= Faustregel "Budget ÷ 6")
+    min_days_between_buys: int = 365  # nur Kaufmodus: höchstens eine Kaufmail je Aktie in diesem Zeitraum
 
 
 @dataclass
@@ -80,6 +76,7 @@ class SignalReport:
     geprueft: int
     betrag: Optional[float] = None
     warnungen: list[str] = field(default_factory=list)
+    mit_verkauf: bool = False
 
     @property
     def has_signals(self) -> bool:
@@ -207,6 +204,26 @@ def currency_of(ticker: str) -> str:
             "CO": "DKK", "L": "GBp", "SW": "CHF", "ST": "SEK", "OL": "NOK"}.get(suffix, "USD" if not suffix else "")
 
 
+def _buy_reason(surprise: float, reaction: float) -> str:
+    return (f"Die Quartalszahlen waren deutlich besser als erwartet (Gewinn {surprise:+.0f} % über der Schätzung) "
+            f"und die Aktie stieg {reaction * 100:.0f} % stärker als der Gesamtmarkt.")
+
+
+def mailed_buys(events: list[dict], index: pd.DatetimeIndex, rules: SignalRules,
+                since: Optional[date] = None) -> list[dict]:
+    """Kaufsignale, für die im Kaufmodus eine Mail kommt (max. eine je Aktie in ``min_days_between_buys``)."""
+    out, last_mail = [], None
+    for ev in sorted((e for e in events if e["kauf"]), key=lambda e: e["pos"]):
+        d = index[ev["pos"]].date()
+        if since is not None and d < since:
+            continue
+        if last_mail is not None and (d - last_mail).days < rules.min_days_between_buys:
+            continue
+        out.append(ev)
+        last_mail = d
+    return out
+
+
 # --------------------------------------------------------------------------- Prüfung
 def scan(
     provider: DataProvider,
@@ -215,8 +232,12 @@ def scan(
     rules: Optional[SignalRules] = None,
     since: Optional[date] = None,
     betrag: Optional[float] = None,
+    verkauf: bool = False,
 ) -> SignalReport:
-    """Prüft alle Werte zum Stichtag (letzter abgeschlossener Handelstag ≤ ``as_of``)."""
+    """Prüft alle Werte zum Stichtag (letzter abgeschlossener Handelstag ≤ ``as_of``).
+
+    ``since``: Start der Mails – frühere Signale zählen weder für Verkäufe noch für die 12-Monats-Grenze.
+    """
     r = rules or SignalRules()
     as_of = as_of or (date.today() - timedelta(days=1))
     start = as_of - timedelta(days=550)
@@ -244,12 +265,18 @@ def scan(
             continue
         last = len(px) - 1
         cur_ccy = currency_of(t)
+        if not verkauf:
+            for ev in mailed_buys(events, px.index, r, since):
+                if ev["pos"] == last:
+                    alerts.append(Alert(
+                        "kauf", t, name, w.get("isin", ""), float(px["close"].iloc[last]), cur_ccy,
+                        px.index[last].date(), grund=_buy_reason(ev["surprise"], ev["reaktion"])))
+            continue
         for p in replay(px, events, r, since):
             if p.buy_pos == last:
                 alerts.append(Alert(
                     "kauf", t, name, w.get("isin", ""), float(px["close"].iloc[last]), cur_ccy, px.index[last].date(),
-                    grund=(f"Die Quartalszahlen waren deutlich besser als erwartet (Gewinn {p.surprise:+.0f} % über der "
-                           f"Schätzung) und die Aktie stieg {p.reaction * 100:.0f} % stärker als der Gesamtmarkt."),
+                    grund=_buy_reason(p.surprise, p.reaction),
                 ))
             elif p.exit_pos == last:
                 res = float(px["close"].iloc[last] / p.entry - 1) if p.entry else None
@@ -259,7 +286,7 @@ def scan(
                                     px.index[last].date(), grund=grund, ergebnis=res))
     # Verkäufe zuerst (Geld wird frei), dann Käufe
     alerts.sort(key=lambda a: 0 if a.art == "verkauf" else 1)
-    return SignalReport(as_of, alerts, len(watchlist), betrag, warnings)
+    return SignalReport(as_of, alerts, len(watchlist), betrag, warnings, verkauf)
 
 
 # --------------------------------------------------------------------------- Mail
@@ -271,7 +298,15 @@ def subject(rep: SignalReport) -> str:
 def _betrag_text(rep: SignalReport) -> str:
     if rep.betrag:
         return f"für {_fmt_eur(rep.betrag)}"
-    return "für deinen festen Betrag pro Kauf (Faustregel: ein Sechstel deines Aktien-Budgets)"
+    if rep.mit_verkauf:
+        return "für deinen festen Betrag pro Kauf (Faustregel: ein Sechstel deines Aktien-Budgets)"
+    return "für deinen festen Betrag pro Kauf"
+
+
+def _rule_text(rep: SignalReport) -> str:
+    if rep.mit_verkauf:
+        return "Kaufmail → kaufen und halten. Verkaufsmail → verkaufen."
+    return "Kaufmail → für deinen festen Betrag kaufen und behalten."
 
 
 def to_html(rep: SignalReport) -> str:
@@ -282,7 +317,8 @@ def to_html(rep: SignalReport) -> str:
             col = "#1a7f37"
             todo = (f"Trade Republic öffnen → nach <b>{e(a.isin or a.ticker)}</b> suchen → <b>Kaufen</b> "
                     f"{e(_betrag_text(rep))}.")
-            after = "Danach einfach <b>halten</b>. Du bekommst eine Mail, wenn du verkaufen sollst (meist nach etwa 3 Monaten)."
+            after = ("Danach einfach <b>halten</b>. Du bekommst eine Mail, wenn du verkaufen sollst (meist nach etwa 3 Monaten)."
+                     if rep.mit_verkauf else "Danach einfach <b>behalten</b> – langfristig, ohne Verkaufen.")
         else:
             col = "#cf222e"
             todo = f"Trade Republic öffnen → <b>{e(a.name)}</b> in deinem Depot antippen → <b>alles verkaufen</b>."
@@ -299,7 +335,7 @@ def to_html(rep: SignalReport) -> str:
     return (
         '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;max-width:600px">'
         + "".join(blocks)
-        + '<p style="color:#888;font-size:12px">Deine Regel: Kaufmail → kaufen und halten. Verkaufsmail → verkaufen. '
+        + f'<p style="color:#888;font-size:12px">Deine Regel: {_rule_text(rep)} '
         f"Stand: Börsenschluss {rep.as_of:%d.%m.%Y}. Automatisch erzeugt, keine Anlageberatung.</p></div>"
     )
 
@@ -310,7 +346,8 @@ def to_text(rep: SignalReport) -> str:
         lines.append(a.titel)
         if a.art == "kauf":
             lines.append(f"So geht's: Trade Republic öffnen, nach {a.isin or a.ticker} suchen, kaufen {_betrag_text(rep)}.")
-            lines.append("Danach einfach halten. Du bekommst eine Mail, wenn du verkaufen sollst (meist nach etwa 3 Monaten).")
+            lines.append("Danach einfach halten. Du bekommst eine Mail, wenn du verkaufen sollst (meist nach etwa 3 Monaten)."
+                         if rep.mit_verkauf else "Danach einfach behalten - langfristig, ohne Verkaufen.")
         else:
             lines.append(f"So geht's: Trade Republic öffnen, {a.name} im Depot antippen, alles verkaufen.")
             if a.ergebnis is not None:
@@ -319,7 +356,7 @@ def to_text(rep: SignalReport) -> str:
         lines.append("")
     if not rep.alerts:
         lines.append("Keine Signale.")
-    lines.append("Deine Regel: Kaufmail -> kaufen und halten. Verkaufsmail -> verkaufen. Keine Anlageberatung.")
+    lines.append(f"Deine Regel: {_rule_text(rep)} Keine Anlageberatung.".replace("→", "->"))
     return "\n".join(lines)
 
 
@@ -365,7 +402,7 @@ def study(provider: DataProvider, watchlist: pd.DataFrame, start: date, end: Opt
     """Historische Prüfung: (1) jedes Kaufsignal einzeln, (2) Depot, wenn man jede Mail befolgt hätte."""
     r = rules or SignalRules()
     end = end or date.today()
-    rows, trades = [], []
+    rows, trades, longrows = [], [], []
     closes: dict[str, pd.Series] = {}
     benches: dict[str, pd.Series] = {}
     for _, w in watchlist.iterrows():
@@ -381,6 +418,22 @@ def study(provider: DataProvider, watchlist: pd.DataFrame, start: date, end: Opt
             log.warning("%s: %s", t, exc)
             continue
         closes[t] = px["close"]
+        mailed = {e["pos"] for e in mailed_buys(ev, px.index, r)}
+        n = len(px)
+        for e in ev:  # Langfrist: kaufen am Folgetag, nie verkaufen
+            i = e["pos"] + 1
+            if i >= n:
+                continue
+            entry, b0 = px["open"].iloc[i], b.iloc[i - 1]
+            lr = {"ticker": t, "mail": e["pos"] in mailed, "kauf": e["kauf"]}
+            for h, lab in ((252, "1J"), (504, "2J"), (756, "3J")):
+                if i + h < n:
+                    lr[lab] = px["close"].iloc[i + h] / entry - 1 - (b.iloc[i + h] / b0 - 1)
+            yrs = (px.index[-1] - px.index[i]).days / 365.25
+            if yrs > 0.5:
+                lr["heute"] = ((px["close"].iloc[-1] / entry) / (b.iloc[-1] / b0)) ** (1 / yrs) - 1
+                lr["endwert"], lr["endwert_index"] = px["close"].iloc[-1] / entry, b.iloc[-1] / b0
+            longrows.append(lr)
         for e in ev:
             p = e["pos"]
             if p + r.hold_days >= len(px):
@@ -412,7 +465,33 @@ def study(provider: DataProvider, watchlist: pd.DataFrame, start: date, end: Opt
         return (f"| {name} | {len(g)} | {g['rendite'].mean() * 100:+.1f} % | {g['ueber_markt'].mean() * 100:+.1f} % | "
                 f"{(g['rendite'] > 0).mean():.0%} | {g['rendite'].min() * 100:+.0f} % |")
 
-    md = ["### Jedes Kaufsignal einzeln (3 Monate gehalten)", "",
+    lg = pd.DataFrame(longrows)
+    md = []
+    if not lg.empty:
+        def lline(name, g):
+            cells = " | ".join(f"{g[lab].median() * 100:+.0f} %" if lab in g and g[lab].notna().any() else "–"
+                               for lab in ("1J", "2J", "3J"))
+            return f"| {name} | {len(g)} | {cells} | {g['heute'].median() * 100:+.1f} % |"
+
+        mail = lg[lg["mail"]]
+        md += ["### Gezielt kaufen und behalten (Standard-Modus)", "",
+               "Vorsprung gegenüber dem Markt (Median) nach einem Kauf am Morgen nach der Meldung:", "",
+               "| Kauf nach … | Fälle | nach 1 Jahr | nach 2 Jahren | nach 3 Jahren | bis heute, pro Jahr |",
+               "|---|---:|---:|---:|---:|---:|",
+               lline("**Kaufmail** (max. 1 je Aktie in 12 Monaten)", mail),
+               lline("jedem Kaufsignal (ohne Begrenzung)", lg[lg["kauf"]]),
+               lline("Quartalszahlen ohne Signal", lg[~lg["kauf"]])]
+        if "endwert" in lg and len(mail):
+            other = lg[~lg["kauf"]].dropna(subset=["endwert"])
+            md += ["", "Endwert, wenn man bei jedem Kauf denselben Betrag investiert und bis heute gehalten hätte – im "
+                       "Verhältnis zu: derselbe Betrag am selben Tag in den Index (S&P 500 bzw. DAX):", "",
+                   f"* Kaufmails: **{mail['endwert'].sum() / mail['endwert_index'].sum():.1f}-mal** so viel wie der Index",
+                   f"* Käufe nach Quartalszahlen ohne Signal: {other['endwert'].sum() / other['endwert_index'].sum():.1f}-mal "
+                   "so viel wie der Index",
+                   "", "Beide Werte sind stark geschönt, weil die Liste die Gewinner von heute enthält. Aussagekräftig ist "
+                       "nur der Vergleich der beiden Zeilen miteinander."]
+        md.append("")
+    md += ["### Optionaler Modus mit Verkauf: jedes Kaufsignal einzeln (3 Monate gehalten)", "",
           "| Gruppe | Fälle | Ø Rendite 3 Mon. | Ø vs. Markt | Anteil positiv | schlechtester Fall |",
           "|---|---:|---:|---:|---:|---:|", line("Alle Quartalszahlen", df), line("**Kaufsignal**", buy)]
     if len(buy):
@@ -457,7 +536,7 @@ def study(provider: DataProvider, watchlist: pd.DataFrame, start: date, end: Opt
             inv.append(1 - cash / eq[-1] if eq[-1] else 0.0)
         equity = pd.Series(eq, index=cal)
         s = _stats(equity)
-        md += ["", f"### Depot, wenn man jede Mail befolgt hätte (ab {cal[0]:%m/%Y}, Budget ÷ {r.slots}, "
+        md += ["", f"### Optionaler Modus mit Verkauf: Depot, wenn man jede Mail befolgt hätte (ab {cal[0]:%m/%Y}, Budget ÷ {r.slots}, "
                    "0,1 % Kosten je Kauf/Verkauf, Cash ohne Zinsen)", "",
                "| | Rendite p. a. | Gesamt | größter Einbruch |", "|---|---:|---:|---:|",
                f"| **Signal-Strategie** ({taken} Käufe, {skipped} mangels freiem Budgetteil ausgelassen) | "

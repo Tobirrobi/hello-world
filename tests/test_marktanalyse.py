@@ -332,6 +332,7 @@ def _signal_setup(after_entry=110.0, n=500):
 def _titles(prov, wl, day, **kw):
     from marktanalyse.signale import scan
 
+    kw.setdefault("verkauf", True)
     return [a.titel for a in scan(prov, wl, day.date(), **kw).alerts]
 
 
@@ -349,13 +350,13 @@ def test_buy_mail_then_sell_mail_after_holding_period():
     from marktanalyse.signale import scan, subject, to_html
 
     prov, wl, idx, react, rules = _signal_setup()
-    rep = scan(prov, wl, idx[react].date(), betrag=500)
+    rep = scan(prov, wl, idx[react].date(), betrag=500, verkauf=True)
     assert subject(rep) == "Aktien-Signal – KAUFEN: Testfirma"
     assert "XX000" in to_html(rep) and "500 €" in to_html(rep)
     assert _titles(prov, wl, idx[react + 10]) == []
     # Einstieg am Folgetag, verkauft wird 63 Handelstage nach dem Signal
     assert _titles(prov, wl, idx[react + rules.hold_days]) == ["VERKAUFEN: Testfirma"]
-    sell = scan(prov, wl, idx[react + rules.hold_days].date()).alerts[0]
+    sell = scan(prov, wl, idx[react + rules.hold_days].date(), verkauf=True).alerts[0]
     assert "3 Monate" in sell.grund and sell.ergebnis == pytest.approx(0.0)
 
 
@@ -393,3 +394,29 @@ def test_weak_reaction_gives_no_signal():
     df.iloc[react:, :4] = 101.0  # nur +1 % Reaktion
     prov.frames["TEST"] = df
     assert _titles(prov, wl, idx[react]) == []
+
+
+def test_buy_only_mode_never_sends_sell_mails():
+    from marktanalyse.signale import scan, to_text
+
+    prov, wl, idx, react, rules = _signal_setup(after_entry=80.0)  # Kurs bricht nach dem Kauf ein
+    rep = scan(prov, wl, idx[react].date(), betrag=250)
+    assert [a.titel for a in rep.alerts] == ["KAUFEN: Testfirma"] and "250 €" in to_text(rep)
+    assert "behalten" in to_text(rep) and "verkaufen sollst" not in to_text(rep)
+    for d in range(react + 1, react + rules.hold_days + 5):
+        assert scan(prov, wl, idx[d].date()).alerts == []
+
+
+def test_buy_only_mode_max_one_mail_per_stock_per_year():
+    prov, wl, idx, react, rules = _signal_setup(n=700)
+    second, third = react + 40, react + 300  # 2 Monate bzw. > 12 Monate später
+    df = prov.frames["TEST"].copy()
+    df.iloc[second:, :4] = 120.0
+    df.iloc[third:, :4] = 132.0
+    prov.frames["TEST"] = df
+    prov.earn["TEST"] = pd.concat([_announce(idx, react), _announce(idx, second), _announce(idx, third)])
+    assert _titles(prov, wl, idx[react], verkauf=False) == ["KAUFEN: Testfirma"]
+    assert _titles(prov, wl, idx[second], verkauf=False) == []
+    assert _titles(prov, wl, idx[third], verkauf=False) == ["KAUFEN: Testfirma"]
+    # Signale vor dem Start der Mails zählen nicht für die Grenze
+    assert _titles(prov, wl, idx[second], verkauf=False, since=idx[react + 1].date()) == ["KAUFEN: Testfirma"]

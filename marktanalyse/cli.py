@@ -176,7 +176,7 @@ def cmd_signale(args) -> None:
     wl = load_watchlist(args.liste)
     prov = make_provider(args.provider, args.data_dir)
     as_of = args.as_of or (date.today() - timedelta(days=1))
-    rep = scan(prov, wl, as_of, since=args.seit, betrag=args.betrag)
+    rep = scan(prov, wl, as_of, since=args.seit, betrag=args.betrag, verkauf=args.mit_verkauf)
     print(subject(rep))
     print(sig_text(rep))
     for w in rep.warnungen:
@@ -244,9 +244,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--provider", default="yahoo", choices=["yahoo", "csv", "demo"])
     g.add_argument("--data-dir")
     g.add_argument("--as-of", type=_date, help="Stichtag (Standard: gestern = letzter abgeschlossener Handelstag)")
-    g.add_argument("--seit", type=_date, help="Nur Kaufsignale ab diesem Datum zählen (Start der Mails); "
-                                              "Verkaufsmails gibt es nur für diese Käufe")
+    g.add_argument("--seit", type=_date, help="Start der Mails: frühere Kaufsignale zählen nicht "
+                                              "(weder für die 12-Monats-Grenze noch für Verkäufe)")
     g.add_argument("--betrag", type=float, help="Fester Betrag pro Kauf in Euro (erscheint in der Kaufmail)")
+    g.add_argument("--mit-verkauf", action="store_true",
+                   help="Zusätzlich Verkaufsmails (nach 3 Monaten oder −15 %%); Standard: nur Kaufmails")
     g.add_argument("--json", help="Ergebnis als JSON (inkl. Betreff, HTML, Text) speichern")
     g.add_argument("--html", help="Mail-Text als HTML speichern")
     g.add_argument("--smtp", action="store_true", help="Bei Signalen Mail per SMTP senden (MAIL_TO, SMTP_HOST, …)")

@@ -10,20 +10,19 @@ eine Strategie für die aktuelle Marktphase.
 > ⚠️ Keine Anlageberatung. Die Analyse ist automatisch und regelbasiert; Daten können fehlerhaft sein.
 > Leerverkäufe bergen ein unbegrenztes Verlustrisiko.
 
-## Signal-Wächter: Kaufmail → kaufen und halten, Verkaufsmail → verkaufen
+## Signal-Wächter: Kaufmails für gezieltes Einkaufen
 
 ```bash
 marktanalyse signale --seit 2026-11-16          # prüft beobachtungsliste.csv für den letzten Börsentag
-marktanalyse signale --betrag 500 --smtp        # … mit festem Betrag in der Mail, Versand per SMTP
-marktanalyse signal-studie --start 2000-01-01   # historische Prüfung inkl. Depot-Simulation
+marktanalyse signale --betrag 250 --smtp        # … mit festem Betrag in der Mail, Versand per SMTP
+marktanalyse signal-studie --start 2000-01-01   # historische Prüfung
 ```
 
-* **Kaufmail**, wenn eine Firma deutlich bessere Quartalszahlen meldet (Gewinn ≥ 5 % über der Erwartung) und die Aktie
-  am Meldetag ≥ 3 % stärker steigt als der Markt.
-* **Verkaufsmail** nach 3 Monaten oder wenn die Aktie mehr als 15 % unter den Kaufkurs fällt.
-* Historisch (2002–2026, jede Mail befolgt, Budget in 6 Teile) etwa 10 % pro Jahr bei kleineren Einbrüchen als die
-  Indizes, also ungefähr so viel wie ein breiter Aktien-ETF. Klassische Chartsignale brachten keinen Vorteil und werden
-  nicht gemeldet.
+**Regel: Kaufmail → für den festen Betrag kaufen und behalten.** Eine Kaufmail kommt, wenn eine Firma deutlich bessere
+Quartalszahlen meldet (Gewinn ≥ 5 % über der Erwartung) und die Aktie am Meldetag ≥ 3 % stärker steigt als der Markt.
+Es gibt höchstens eine Mail pro Aktie in 12 Monaten, insgesamt etwa 9 im Jahr. Historisch lagen solche Käufe nach
+1–3 Jahren im Median deutlich vor Käufen derselben Aktien ohne Signal. Chartsignale wie 200-Tage-Linie, RSI oder MACD
+brachten bei Einzelaktien keinen Vorteil. Verkaufsmails sind optional (`--mit-verkauf`).
 
 Alle Regeln, Tests und Einordnungen: **[docs/SIGNALE.md](docs/SIGNALE.md)**.
 
