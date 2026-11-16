@@ -72,6 +72,14 @@ Reproduzierbar mit `marktanalyse signal-studie --start 2000-01-01` (Stand 16.11.
 Trendfolge auf Indexebene (siehe zweite Tabelle oben) halbierte bis drittelte die maximalen Einbrüche. Die Rendite
 lag mal etwas darunter (S&P 500, MSCI World), mal darüber (DAX). Die Ampel wechselt im Schnitt etwa 2-mal pro Jahr.
 
+## Hinweise für Trade Republic
+
+* Kurse und Referenzwerte in der Mail stehen in der Börsenwährung (USD bei US-Aktien, DKK bei Novo Nordisk).
+  Trade Republic zeigt Euro. Die Notbremse deshalb als **Stop-Loss 15 % unter deinem eigenen Kaufkurs** setzen.
+* Das Signal „Notbremse ausgelöst“ wird auf Basis des Börsenkurses berechnet. Durch Wechselkursschwankungen kann
+  deine Stop-Order bei Trade Republic etwas früher oder später auslösen.
+* Gesucht und gehandelt wird am einfachsten über die ISIN aus der Mail.
+
 ## Häufigkeit
 
 Rückblickend Juli bis November 2026: 12 Meldungen (5 Käufe, 7 Verkäufe), also etwa 2–3 Mails pro Monat. Rund um die
@@ -95,7 +103,9 @@ und L'Oréal z. B. nicht, daher sind sie nicht in der Liste).
 
 * **Zeitpunkt:** werktags 6:47 Uhr (Europe/Berlin). Ausgewertet wird der letzte abgeschlossene Handelstag, eine Kauforder
   ist also vor bzw. bei Handelsbeginn möglich.
-* **Variante A (eingerichtet):** geplante Claude-Aufgabe, die den Wächter ausführt und bei Signalen über Gmail mailt.
+* **Variante A (eingerichtet):** eine geplante Claude-Aufgabe weckt werktags um 6:47 Uhr die Claude-Sitzung, in der das
+  Tool entstanden ist. Die Sitzung führt \`marktanalyse signale\` aus und mailt bei Signalen über das verbundene
+  Gmail-Konto. Verwalten oder abschalten lässt sich das in claude.ai unter den geplanten Aufgaben.
 * **Variante B:** GitHub Actions (`.github/workflows/marktanalyse.yml`) mit SMTP. Dafür im Repository unter
   Settings → Secrets die Werte `MAIL_TO`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` und `SMTP_PASSWORD` hinterlegen,
   z. B. ein Gmail-App-Passwort. Nur eine der beiden Varianten nutzen, sonst kommen Mails doppelt.

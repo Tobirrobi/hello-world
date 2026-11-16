@@ -68,6 +68,7 @@ class Alert:
     details: list[str] = field(default_factory=list)
     stop: Optional[float] = None
     halten_bis: Optional[date] = None
+    waehrung: str = ""
 
 
 @dataclass
@@ -146,6 +147,13 @@ def _fmt_pct(x: float, digits: int = 1) -> str:
 
 def _fmt_px(x: float) -> str:
     return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def currency_of(ticker: str) -> str:
+    """Kurswährung aus dem Yahoo-Börsenkürzel (Trade Republic zeigt Kurse in EUR)."""
+    suffix = ticker.rsplit(".", 1)[-1].upper() if "." in ticker else ""
+    return {"DE": "EUR", "F": "EUR", "AS": "EUR", "PA": "EUR", "MI": "EUR", "MC": "EUR", "BR": "EUR",
+            "CO": "DKK", "L": "GBp", "SW": "CHF", "ST": "SEK", "OL": "NOK"}.get(suffix, "USD" if not suffix else "")
 
 
 # --------------------------------------------------------------------------- Prüfung
@@ -251,8 +259,9 @@ def scan(
                 alerts.append(Alert(
                     "verkauf", f"VERKAUFEN: {name} – Notbremse ausgelöst", t, name, w.get("isin", ""),
                     float(px["close"].iloc[last]), px.index[last].date(),
-                    details=[f"Kaufsignal vom {ref['datum']:%d.%m.%Y}, Einstand ca. {_fmt_px(entry)}",
-                             f"Schlusskurs {_fmt_px(float(px['close'].iloc[last]))} = "
+                    details=[f"Kaufsignal vom {ref['datum']:%d.%m.%Y}, Einstand an der Börse ca. {_fmt_px(entry)} "
+                             f"{currency_of(t)}",
+                             f"Schlusskurs {_fmt_px(float(px['close'].iloc[last]))} {currency_of(t)} = "
                              f"{_fmt_pct(px['close'].iloc[last] / entry - 1)} – Verlust begrenzen."],
                 ))
             elif days_held == r.hold_days and not stopped_before:
@@ -260,11 +269,18 @@ def scan(
                 alerts.append(Alert(
                     "verkauf", f"VERKAUFEN: {name} – Haltedauer von 3 Monaten erreicht", t, name, w.get("isin", ""),
                     float(px["close"].iloc[last]), px.index[last].date(),
-                    details=[f"Kaufsignal vom {ref['datum']:%d.%m.%Y}, Einstand ca. {_fmt_px(entry)}",
-                             f"Ergebnis seit Einstieg: {_fmt_pct(perf)}",
+                    details=[f"Kaufsignal vom {ref['datum']:%d.%m.%Y}, Einstand an der Börse ca. {_fmt_px(entry)} "
+                             f"{currency_of(t)}",
+                             f"Ergebnis seit Einstieg: {_fmt_pct(perf)} (in {currency_of(t)}, ohne Wechselkurseffekt)",
                              "Der typische Nachlauf nach Quartalszahlen ist vorbei – Position schließen "
                              "(oder bewusst als Langfrist-Investment weiterhalten)."],
                 ))
+
+    for al in alerts:
+        if al.art != "markt" and not al.waehrung:
+            al.waehrung = currency_of(al.ticker)
+        elif al.art == "markt":
+            al.waehrung = "USD"
 
     # ---- Kontext aus der Fundamentalanalyse für neue Kaufsignale
     if analyzer is not None and buy_tickers:
@@ -277,7 +293,7 @@ def scan(
                     continue
                 f = a.metrics["fundamental"]
                 pe = "Verlust" if f.get("eps_negative") else (f"{f['pe']:.1f}".replace(".", ",") if f.get("pe") else "–")
-                al.details.append(f"Gesamtanalyse: {a.recommendation.label}, Score {a.total_score:+.2f}, KGV {pe}")
+                al.details.append(f"Gesamtanalyse: {a.recommendation.label}, Score {a.total_score:+.2f}, KGV {pe}".replace("Score +0.", "Score +0,").replace("Score -0.", "Score -0,"))
                 z = f.get("altman_z")
                 if z is not None and z < 1.81:
                     al.details.append(f"⚠️ Altman Z {z:.2f}: erhöhtes Insolvenzrisiko – Position klein halten.")
@@ -320,10 +336,11 @@ def to_html(rep: SignalReport) -> str:
         if a.ticker:
             meta.append(f"Ticker {e(a.ticker)}")
         if a.kurs is not None:
-            meta.append(f"Schlusskurs {e(_fmt_px(a.kurs))}" + (f" am {a.datum:%d.%m.%Y}" if a.datum else ""))
+            meta.append(f"Schlusskurs {e(_fmt_px(a.kurs))} {e(a.waehrung)}" + (f" am {a.datum:%d.%m.%Y}" if a.datum else ""))
         plan = ""
         if a.art == "kauf":
-            plan = (f"<p><b>Plan:</b> heute kaufen · Notbremse (Stop-Loss) bei <b>{e(_fmt_px(a.stop))}</b> (−15 %) · "
+            plan = (f"<p><b>Plan:</b> heute kaufen · <b>Notbremse: Stop-Loss 15 % unter deinem Kaufkurs</b> setzen "
+                    f"(bei Trade Republic in EUR; Referenz Börse: {e(_fmt_px(a.stop))} {e(a.waehrung)}) · "
                     f"Haltedauer bis ca. <b>{a.halten_bis:%d.%m.%Y}</b> – du bekommst dann eine Verkaufsmail.</p>")
         blocks.append(
             f'<div style="border-left:4px solid {color[a.art]};padding:4px 12px;margin:14px 0">'
@@ -351,10 +368,11 @@ def to_text(rep: SignalReport) -> str:
         if a.isin:
             lines.append(f"  ISIN {a.isin} | Ticker {a.ticker}")
         if a.kurs is not None:
-            lines.append(f"  Schlusskurs {_fmt_px(a.kurs)}")
+            lines.append(f"  Schlusskurs {_fmt_px(a.kurs)} {a.waehrung}")
         lines += [f"  - {d}" for d in a.details]
         if a.art == "kauf":
-            lines.append(f"  Plan: kaufen, Notbremse {_fmt_px(a.stop)}, halten bis ca. {a.halten_bis:%d.%m.%Y}")
+            lines.append(f"  Plan: kaufen, Stop-Loss 15 % unter deinem Kaufkurs (Referenz {_fmt_px(a.stop)} "
+                         f"{a.waehrung}), halten bis ca. {a.halten_bis:%d.%m.%Y}")
         lines.append("")
     if not rep.alerts:
         lines.append("Keine deutlichen Signale.")
